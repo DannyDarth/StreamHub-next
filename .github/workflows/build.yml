@@ -41,6 +41,8 @@ jobs:
         shell: bash
         env:
           STREAMHUB_TWITCH_PLUGIN: src-tauri/resources/streamlink-plugins/twitch.py
+          # keep __pycache__ out of the bundled plugin folder
+          PYTHONDONTWRITEBYTECODE: '1'
         run: |
           set -euo pipefail
           python -m pip install --quiet "streamlink==8.3.*" pytest
