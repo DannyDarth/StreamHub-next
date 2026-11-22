@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "StreamHub's main window and ad blocking badge",
+  "windows": ["main", "badge"],
+  "permissions": [
+    "core:default",
+    "notification:default"
+  ]
+}

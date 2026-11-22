@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>StreamHub ad blocking badge</title>
+    <link rel="stylesheet" href="/src/badge.css" />
+  </head>
+  <body>
+    <div id="badge" class="badge info" role="status" title="Click to hide">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3Z" />
+        <path class="mark" d="m8.5 12 2.5 2.5 4.5-5" />
+      </svg>
+      <div class="text">
+        <div id="label" class="label">StreamHub</div>
+        <div id="detail" class="detail"></div>
+      </div>
+    </div>
+    <script type="module" src="/src/badge.ts"></script>
+  </body>
+</html>
