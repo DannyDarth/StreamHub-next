@@ -1,18 +1,20 @@
 //! Kick: live status of the user's Kick channels.
 //!
 //! Kick's public API has no "followed channels" list, so (like StreamHub 1.x) StreamHub keeps the
-//! user's own list of Kick channels and checks each one. kick.com doesn't allow cross-origin
-//! requests from the UI, so the requests are made here.
+//! user's own list of Kick channels and checks each one.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tauri::webview::PageLoadEvent;
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tokio::sync::oneshot;
 
 use crate::streamlink::valid_kick_slug;
-
-const USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,55 +74,174 @@ pub fn parse_channel(slug: &str, data: &Value) -> KickChannel {
     }
 }
 
-async fn check(client: reqwest::Client, slug: String) -> KickChannel {
-    let url = format!("https://kick.com/api/v2/channels/{slug}");
-    let result = async {
-        let res = client.get(&url).send().await.map_err(|e| e.to_string())?;
-        match res.status().as_u16() {
-            200 => {}
-            404 => return Err("Channel not found".to_string()),
-            code => return Err(format!("Kick returned {code}")),
-        }
-        res.json::<Value>().await.map_err(|e| e.to_string())
-    }
-    .await;
+/// kick.com blocks requests that don't come from a real browser (it answered StreamHub's own
+/// HTTP client with 403), so the requests are made by a hidden browser window on kick.com, like
+/// StreamHub 1.x did. The window has no access to StreamHub's commands: the script hands the
+/// results back by navigating to a special URL, which is cancelled and read here.
+pub struct KickFetcher {
+    next_id: AtomicU64,
+    ready: tokio::sync::watch::Sender<bool>,
+    pending: Mutex<HashMap<u64, oneshot::Sender<String>>>,
+}
 
-    match result {
-        Ok(data) => parse_channel(&slug, &data),
-        Err(error) => KickChannel { name: slug.clone(), slug, error: Some(error), ..Default::default() },
+impl Default for KickFetcher {
+    fn default() -> Self {
+        Self {
+            next_id: AtomicU64::new(0),
+            ready: tokio::sync::watch::channel(false).0,
+            pending: Mutex::new(HashMap::new()),
+        }
     }
+}
+
+const FETCHER: &str = "kick-fetcher";
+const PAGE: &str = "https://kick.com/robots.txt";
+const RESULT_HOST: &str = "streamhub.invalid";
+
+/// Fetches the channels in the page and keeps only the fields StreamHub uses.
+const SCRIPT: &str = r#"
+(async () => {
+  const pick = (d) => {
+    const u = (d && d.user) || {};
+    const l = d && d.livestream;
+    return {
+      user: { username: u.username, profile_pic: u.profile_pic },
+      livestream: l ? {
+        is_live: l.is_live, session_title: l.session_title, viewer_count: l.viewer_count, viewers: l.viewers,
+        created_at: l.created_at, start_time: l.start_time, thumbnail: l.thumbnail,
+        categories: (l.categories || []).slice(0, 1).map((c) => ({ name: c.name })),
+        category: l.category ? { name: l.category.name } : null,
+      } : null,
+    };
+  };
+  const slugs = __SLUGS__;
+  const out = [];
+  for (let i = 0; i < slugs.length; i += 5) {
+    out.push(...await Promise.all(slugs.slice(i, i + 5).map(async (slug) => {
+      try {
+        const res = await fetch(`/api/v2/channels/${encodeURIComponent(slug)}`, { headers: { Accept: "application/json" } });
+        if (!res.ok) return { slug, status: res.status };
+        return { slug, status: 200, data: pick(await res.json()) };
+      } catch (e) {
+        return { slug, status: 0, error: String(e) };
+      }
+    })));
+  }
+  location.href = "https://__HOST__/kick?id=__ID__&data=" + encodeURIComponent(JSON.stringify(out));
+})();
+"#;
+
+fn fetcher_navigation(app: &AppHandle, url: &tauri::Url) -> bool {
+    if url.host_str() == Some(RESULT_HOST) {
+        let mut id = None;
+        let mut data = None;
+        for (key, value) in url.query_pairs() {
+            match key.as_ref() {
+                "id" => id = value.parse::<u64>().ok(),
+                "data" => data = Some(value.into_owned()),
+                _ => {}
+            }
+        }
+        if let (Some(id), Some(data)) = (id, data) {
+            let fetcher = app.state::<KickFetcher>();
+            if let Some(tx) = fetcher.pending.lock().unwrap().remove(&id) {
+                let _ = tx.send(data);
+            }
+        }
+        return false;
+    }
+    // stay on kick.com
+    url.scheme() == "https" && url.host_str() == Some("kick.com")
+}
+
+fn ensure_window(app: &AppHandle) -> Result<WebviewWindow, String> {
+    if let Some(window) = app.get_webview_window(FETCHER) {
+        return Ok(window);
+    }
+    let nav_app = app.clone();
+    let load_app = app.clone();
+    WebviewWindowBuilder::new(app, FETCHER, WebviewUrl::External(PAGE.parse().unwrap()))
+        .title("StreamHub Kick")
+        .visible(false)
+        .skip_taskbar(true)
+        .focused(false)
+        .inner_size(400.0, 300.0)
+        .on_navigation(move |url| fetcher_navigation(&nav_app, url))
+        .on_page_load(move |_, payload| {
+            if matches!(payload.event(), PageLoadEvent::Finished) && payload.url().host_str() == Some("kick.com") {
+                let _ = load_app.state::<KickFetcher>().ready.send_replace(true);
+            }
+        })
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Deserialize)]
+struct FetchResult {
+    slug: String,
+    status: u16,
+    #[serde(default)]
+    data: Option<Value>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+fn to_channel(result: FetchResult) -> KickChannel {
+    let error = match result.status {
+        200 => match &result.data {
+            Some(data) => return parse_channel(&result.slug, data),
+            None => "Kick returned no data".to_string(),
+        },
+        404 => "Channel not found".to_string(),
+        0 => format!("Couldn't reach Kick: {}", result.error.unwrap_or_default()),
+        code => format!("Kick returned {code}"),
+    };
+    KickChannel { name: result.slug.clone(), slug: result.slug, error: Some(error), ..Default::default() }
 }
 
 /// Check which of these Kick channels are live.
 #[tauri::command]
-pub async fn kick_channels(slugs: Vec<String>) -> Result<Vec<KickChannel>, String> {
-    let client = reqwest::Client::builder()
-        .user_agent(USER_AGENT)
-        .timeout(Duration::from_secs(15))
-        .default_headers({
-            let mut headers = reqwest::header::HeaderMap::new();
-            headers.insert(reqwest::header::ACCEPT, "application/json".parse().unwrap());
-            headers
-        })
-        .build()
-        .map_err(|e| e.to_string())?;
-
+pub async fn kick_channels(app: AppHandle, slugs: Vec<String>) -> Result<Vec<KickChannel>, String> {
     let mut slugs: Vec<String> = slugs.into_iter().map(|s| s.trim().to_ascii_lowercase()).collect();
     slugs.retain(|s| valid_kick_slug(s));
     slugs.dedup();
-
-    let mut channels = Vec::with_capacity(slugs.len());
-    // a few at a time, to be gentle with kick.com
-    for chunk in slugs.chunks(5) {
-        let tasks: Vec<_> = chunk
-            .iter()
-            .map(|slug| tauri::async_runtime::spawn(check(client.clone(), slug.clone())))
-            .collect();
-        for task in tasks {
-            channels.push(task.await.map_err(|e| e.to_string())?);
-        }
+    if slugs.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(channels)
+
+    let window = ensure_window(&app)?;
+    let fetcher = app.state::<KickFetcher>();
+    let mut ready = fetcher.ready.subscribe();
+    tokio::time::timeout(Duration::from_secs(30), ready.wait_for(|ready| *ready))
+        .await
+        .map_err(|_| "Kick didn't load in time".to_string())?
+        .map_err(|e| e.to_string())?;
+
+    let id = fetcher.next_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let (tx, rx) = oneshot::channel();
+    fetcher.pending.lock().unwrap().insert(id, tx);
+
+    let script = SCRIPT
+        .replace("__SLUGS__", &serde_json::to_string(&slugs).map_err(|e| e.to_string())?)
+        .replace("__HOST__", RESULT_HOST)
+        .replace("__ID__", &id.to_string());
+    if let Err(e) = window.eval(&script) {
+        fetcher.pending.lock().unwrap().remove(&id);
+        return Err(e.to_string());
+    }
+
+    let data = match tokio::time::timeout(Duration::from_secs(45), rx).await {
+        Ok(Ok(data)) => data,
+        _ => {
+            fetcher.pending.lock().unwrap().remove(&id);
+            // reload kick.com for the next try
+            let _ = fetcher.ready.send_replace(false);
+            let _ = window.eval(&format!("location.href = {}", serde_json::to_string(PAGE).unwrap()));
+            return Err("Kick didn't answer in time".into());
+        }
+    };
+    let results: Vec<FetchResult> = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+    Ok(results.into_iter().map(to_channel).collect())
 }
 
 #[cfg(test)]
@@ -167,6 +288,18 @@ mod tests {
         assert_eq!(channel.name, "Quiet");
         assert_eq!(channel.viewers, None);
         assert_eq!(channel.thumbnail, None);
+    }
+
+    #[test]
+    fn fetch_results() {
+        let offline: FetchResult = serde_json::from_value(json!({ "slug": "a", "status": 403 })).unwrap();
+        assert_eq!(to_channel(offline).error.as_deref(), Some("Kick returned 403"));
+        let ok: FetchResult = serde_json::from_value(json!({
+            "slug": "b", "status": 200, "data": { "user": { "username": "B" }, "livestream": null }
+        }))
+        .unwrap();
+        let channel = to_channel(ok);
+        assert_eq!((channel.name.as_str(), channel.live, channel.error), ("B", false, None));
     }
 
     #[test]

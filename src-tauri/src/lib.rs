@@ -21,6 +21,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .manage(streamlink::Streams::default())
+        .manage(kick::KickFetcher::default())
         .invoke_handler(tauri::generate_handler![
             auth::twitch_login,
             streamlink::watch,
