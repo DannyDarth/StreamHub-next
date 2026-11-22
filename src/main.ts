@@ -365,7 +365,27 @@ function kickCard(channel: KickChannel): HTMLElement {
       h(
         "div",
         { class: "thumb" },
-        channel.thumbnail ? h("img", { src: channel.thumbnail, alt: "", loading: "lazy" }) : null,
+        channel.thumbnail
+          ? h("img", {
+              src: channel.thumbnail,
+              alt: "",
+              loading: "lazy",
+              referrerpolicy: "no-referrer",
+              // if Kick won't serve the thumbnail, show the channel's picture instead
+              onerror: (e) => {
+                const img = e.target as HTMLImageElement;
+                if (channel.avatar && !img.dataset.fallback) {
+                  img.dataset.fallback = "1";
+                  img.src = channel.avatar;
+                  img.classList.add("fallback");
+                } else {
+                  img.remove();
+                }
+              },
+            })
+          : channel.avatar
+            ? h("img", { src: channel.avatar, alt: "", class: "fallback", referrerpolicy: "no-referrer" })
+            : null,
         h("span", { class: "viewers kick" }, `● ${channel.viewers === null ? "Live" : channel.viewers.toLocaleString()}`),
       ),
       h("div", { class: "card-title" }, channel.title || "Untitled stream"),
@@ -386,7 +406,9 @@ function kickRow(slug: string, channel: KickChannel | undefined): HTMLElement {
   return h(
     "div",
     { class: "row" },
-    channel?.avatar ? h("img", { class: "avatar", src: channel.avatar, alt: "" }) : h("span", { class: "avatar" }),
+    channel?.avatar
+      ? h("img", { class: "avatar", src: channel.avatar, alt: "", referrerpolicy: "no-referrer" })
+      : h("span", { class: "avatar" }),
     h("strong", {}, channel?.name ?? slug),
     h("span", { class: channel?.error ? "row-error" : "muted" }, status),
     h("button", { class: "link", onclick: () => removeKick(slug) }, "Remove"),

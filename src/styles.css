@@ -232,3 +232,4 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .row .link { margin-left: auto; }
 .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--panel-2); object-fit: cover; flex: none; }
 .row-error { color: var(--error); }
+.thumb img.fallback { object-fit: contain; padding: 18%; background: var(--panel-2); }
