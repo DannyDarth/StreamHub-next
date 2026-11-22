@@ -171,3 +171,48 @@ def test_plugin_arguments():
     assert "backup-stream" in names
     assert "backup-stream-player-types" in names
     assert "proxy-playlist" in names
+
+
+class ProxyPlugin:
+    """A stand-in for the Twitch plugin, for PlaylistProxyService."""
+
+    def __init__(self, proxies, results, fallback=False):
+        self.options = {"proxy-playlist": proxies, "proxy-playlist-fallback": fallback}
+        self.results = list(results)
+        self.used_proxies = []
+        self.api = SimpleNamespace(is_channel_live=lambda channel: True)
+        self.session = SimpleNamespace(http=SimpleNamespace(headers={}, proxies={}))
+
+    def get_option(self, name):
+        return self.options.get(name)
+
+    def _get_hls_streams_live(self, channel):
+        self.used_proxies.append(dict(self.session.http.proxies).get("https", "direct"))
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def test_http_proxy_failure_tries_the_next_proxy():
+    from streamlink.exceptions import PluginError
+
+    plugin = ProxyPlugin(
+        ["httpproxy://down.example:2023", "httpproxy://empty.example:2023", "httpproxy://up.example:2023"],
+        [PluginError("Unable to connect to proxy"), None, {"best": "stream"}],
+    )
+    streams = twitch.PlaylistProxyService(plugin).streams("channel")
+
+    assert streams == {"best": "stream"}
+    assert plugin.used_proxies == ["http://down.example:2023", "http://empty.example:2023", "http://up.example:2023"]
+    assert plugin.session.http.proxies == {}
+
+
+def test_http_proxy_failures_never_fall_back_to_twitch():
+    from streamlink.exceptions import NoStreamsError, PluginError
+    import pytest
+
+    plugin = ProxyPlugin(["httpproxy://down.example:2023"], [PluginError("Unable to connect to proxy")])
+    with pytest.raises(NoStreamsError):
+        twitch.PlaylistProxyService(plugin).streams("channel")
+    assert plugin.used_proxies == ["http://down.example:2023"], "no direct request to Twitch"

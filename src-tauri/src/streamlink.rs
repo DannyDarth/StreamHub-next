@@ -176,6 +176,32 @@ pub fn find_plugin(app: &AppHandle) -> Option<Plugin> {
         .then_some(Plugin { dir: None, bundled: false })
 }
 
+/// Cut the long query strings (access tokens) out of URLs in an error message.
+pub fn shorten_urls(message: &str) -> String {
+    message
+        .split(' ')
+        .map(|word| match word.find('?') {
+            Some(i) if word.contains('/') => {
+                let tail = word[i..].rfind(')').map_or("", |j| &word[i + j..]);
+                format!("{}…{}", &word[..i], tail)
+            }
+            _ => word.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The error shown when a stream ends with an error.
+pub fn explain_error(error: &str, ad_free_only: bool) -> String {
+    let error = shorten_urls(error);
+    if ad_free_only && error.starts_with("No playable streams found") {
+        return "No ad-free proxy could play this stream right now, so StreamHub didn't play it \
+                (it would have ads). The channel may also have just gone offline. Try again in a minute."
+            .into();
+    }
+    error
+}
+
 /// Streamlink's arguments for one launch.
 pub fn build_args(
     channel: &str,
@@ -297,8 +323,11 @@ impl Runner {
             let mut switching = false;
             for line in rx {
                 let message = adblock::strip_log_prefix(&line);
-                if line.contains("][error]") || message.starts_with("error:") {
-                    last_error = Some(message.trim_start_matches("error:").trim().to_string());
+                if let Some(cli_error) = message.strip_prefix("error:") {
+                    // Streamlink's final error wins over the plugin's per-proxy errors
+                    last_error = Some(cli_error.trim().to_string());
+                } else if line.contains("][error]") && last_error.is_none() {
+                    last_error = Some(message.to_string());
                 }
                 let Some(event) = adblock::parse_event(&line) else { continue };
                 if event != Event::AdDetected {
@@ -342,7 +371,10 @@ impl Runner {
         let error = match code {
             Some(0) => None,
             _ if self.session.stopped.load(Ordering::SeqCst) => None,
-            _ => last_error.or_else(|| Some("Streamlink stopped unexpectedly".into())),
+            _ => Some(explain_error(
+                last_error.as_deref().unwrap_or("Streamlink stopped unexpectedly"),
+                self.plugin.is_some() && !self.settings.direct,
+            )),
         };
         let _ = self.app.emit(
             "stream-ended",
@@ -443,6 +475,24 @@ mod tests {
         assert!(!valid_channel(""));
         assert!(valid_quality("720p60,best"));
         assert!(!valid_quality("best --player=calc"));
+    }
+
+    #[test]
+    fn explains_errors() {
+        let raw = "Unable to open URL: https://usher.ttvnw.net/api/v2/channel/hls/x.m3u8?sig=abc&token=%7B%7D \
+                   (HTTPSConnectionPool(host='usher.ttvnw.net', port=443): Max retries exceeded with url: \
+                   /api/v2/channel/hls/x.m3u8?sig=abc&token=%7B%7D (Caused by ProxyError('Unable to connect to proxy')))";
+        assert_eq!(
+            explain_error(raw, true),
+            "Unable to open URL: https://usher.ttvnw.net/api/v2/channel/hls/x.m3u8… \
+             (HTTPSConnectionPool(host='usher.ttvnw.net', port=443): Max retries exceeded with url: \
+             /api/v2/channel/hls/x.m3u8… (Caused by ProxyError('Unable to connect to proxy')))"
+        );
+        assert!(explain_error("No playable streams found on this URL: twitch.tv/x", true).starts_with("No ad-free proxy"));
+        assert_eq!(
+            explain_error("No playable streams found on this URL: twitch.tv/x", false),
+            "No playable streams found on this URL: twitch.tv/x"
+        );
     }
 
     #[test]

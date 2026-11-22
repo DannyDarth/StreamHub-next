@@ -4,7 +4,8 @@ Build StreamHub's bundled Streamlink Twitch plugin.
 
 1. Download the pinned streamlink-ttvlol release (playlist proxies for ad-free Twitch streams)
 2. Verify its SHA-256 checksum
-3. Apply StreamHub's patch (optional ad-free backup stream during ad breaks)
+3. Apply StreamHub's patch (optional ad-free backup stream during ad breaks; a failing HTTP proxy
+   moves on to the next proxy instead of stopping)
 4. Copy the plugin's license next to it
 
 Usage: build_plugin.py OUTPUT_DIR  (StreamHub builds into src-tauri/resources/streamlink-plugins)

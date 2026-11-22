@@ -208,7 +208,23 @@
  
  
  class UsherService:
-@@ -950,6 +1111,22 @@
+@@ -377,8 +538,13 @@
+                     "https": f"http://{parsed_url.netloc}",
+                 }
+                 try:
+-                    return self.plugin._get_hls_streams_live(channel)
+-                except OSError as err:
++                    # StreamHub: try the next proxy when this one fails. Streamlink wraps connection
++                    # errors in PluginError (not an OSError), and 4xx/5xx responses return no streams.
++                    streams = self.plugin._get_hls_streams_live(channel)
++                    if streams:
++                        return streams
++                    log.error(f"No streams through HTTP proxy '{parsed_url.netloc}'")
++                except (OSError, PluginError) as err:
+                     log.error(err)
+                 finally:
+                     self.plugin.session.http.proxies = {}
+@@ -950,6 +1116,22 @@
          Fallback to Twitch servers if all requests to playlist proxies fail.
      """,
  )
@@ -231,7 +247,7 @@
  class Twitch(Plugin):
      _CACHE_KEY_CLIENT_INTEGRITY = "client-integrity"
  
-@@ -1154,11 +1331,18 @@
+@@ -1154,11 +1336,18 @@
          elif self.clip_id:
              return self._get_clips(self.clip_id)
          elif self.channel:

@@ -96,10 +96,6 @@ impl ProxyRotation {
         Self { servers, switches: 0 }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.servers.is_empty()
-    }
-
     pub fn playlist(&self) -> String {
         let mut servers = self.servers.clone();
         if !servers.is_empty() {
@@ -269,7 +265,6 @@ mod tests {
     #[test]
     fn empty_rotation() {
         let mut rotation = ProxyRotation::new(vec![]);
-        assert!(rotation.is_empty());
         assert_eq!(rotation.playlist(), "");
         assert_eq!(rotation.first(), None);
         assert!(!rotation.switch());
