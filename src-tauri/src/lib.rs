@@ -1,6 +1,7 @@
 mod adblock;
 mod auth;
 mod badge;
+mod kick;
 mod streamlink;
 
 use tauri::menu::{Menu, MenuItem};
@@ -26,6 +27,7 @@ pub fn run() {
             streamlink::stop,
             streamlink::streamlink_info,
             badge::badge_hide,
+            kick::kick_channels,
         ])
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "Show StreamHub", true, None::<&str>)?;

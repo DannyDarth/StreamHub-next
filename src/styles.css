@@ -196,3 +196,39 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .check span { display: flex; flex-direction: column; }
 .check small { color: var(--muted); font-size: 12.5px; }
 .warning { color: var(--warn); }
+
+/* Kick */
+.chip.kick { color: var(--kick); }
+.viewers.kick { color: var(--kick); }
+.card-wrap { position: relative; }
+.remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.card-wrap:hover .remove, .remove:focus-visible { opacity: 1; }
+.add { display: flex; gap: 8px; margin-bottom: 18px; max-width: 560px; }
+.add input { flex: 1; }
+.rows { display: flex; flex-direction: column; gap: 6px; max-width: 720px; }
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+.row .link { margin-left: auto; }
+.avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--panel-2); object-fit: cover; flex: none; }
+.row-error { color: var(--error); }

@@ -18,6 +18,13 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::adblock::{self, Event, Level, ProxyRotation, Status, Tracker};
 use crate::badge;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Platform {
+    Twitch,
+    Kick,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WatchSettings {
@@ -134,6 +141,11 @@ pub fn valid_channel(channel: &str) -> bool {
     !channel.is_empty() && channel.len() <= 25 && channel.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Kick channel slugs also allow dashes.
+pub fn valid_kick_slug(slug: &str) -> bool {
+    !slug.is_empty() && slug.len() <= 64 && slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 pub fn valid_quality(quality: &str) -> bool {
     !quality.is_empty() && quality.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ',')
 }
@@ -221,6 +233,7 @@ pub fn explain_error(error: &str, ad_free_only: bool) -> String {
 
 /// Streamlink's arguments for one launch.
 pub fn build_args(
+    platform: Platform,
     channel: &str,
     settings: &WatchSettings,
     plugin: Option<&Plugin>,
@@ -233,7 +246,7 @@ pub fn build_args(
     }
     args.push("--title".into());
     args.push(format!("{channel} - StreamHub").into());
-    if settings.low_latency {
+    if platform == Platform::Twitch && settings.low_latency {
         args.push("--twitch-low-latency".into());
     }
     if let Some(plugin) = plugin {
@@ -250,8 +263,16 @@ pub fn build_args(
             args.push("--twitch-backup-stream".into());
         }
     }
-    args.push(format!("twitch.tv/{channel}").into());
-    args.push(settings.quality.clone().into());
+    args.push(match platform {
+        Platform::Twitch => format!("twitch.tv/{channel}").into(),
+        Platform::Kick => format!("https://kick.com/{channel}").into(),
+    });
+    // fall back to the best quality when the chosen one doesn't exist (Kick names them differently)
+    let quality = match settings.quality.as_str() {
+        "best" | "worst" => settings.quality.clone(),
+        q => format!("{q},best"),
+    };
+    args.push(quality.into());
     args
 }
 
@@ -268,6 +289,7 @@ fn spawn_reader<R: Read + Send + 'static>(reader: R, tx: mpsc::Sender<String>) {
 
 struct Runner {
     app: AppHandle,
+    platform: Platform,
     id: u64,
     channel: String,
     settings: WatchSettings,
@@ -299,7 +321,7 @@ impl Runner {
         let code = loop {
             let mut command = Command::new(&self.exe);
             command
-                .args(build_args(&self.channel, &self.settings, self.plugin.as_ref(), &rotation))
+                .args(build_args(self.platform, &self.channel, &self.settings, self.plugin.as_ref(), &rotation))
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
@@ -411,11 +433,16 @@ impl Runner {
 pub fn watch(
     app: AppHandle,
     streams: State<'_, Streams>,
+    platform: Platform,
     channel: String,
     settings: WatchSettings,
 ) -> Result<u64, String> {
     let channel = channel.to_ascii_lowercase();
-    if !valid_channel(&channel) {
+    let valid = match platform {
+        Platform::Twitch => valid_channel(&channel),
+        Platform::Kick => valid_kick_slug(&channel),
+    };
+    if !valid {
         return Err("Invalid channel name".into());
     }
     if !valid_quality(&settings.quality) {
@@ -424,7 +451,8 @@ pub fn watch(
     let exe = find_streamlink(settings.streamlink_path.as_deref()).ok_or(
         "Streamlink wasn't found. Install it from streamlink.github.io or set its path in Settings.",
     )?;
-    let plugin = if settings.proxy_enabled {
+    // the ad blocking plugin is for Twitch: Kick doesn't put ads into the streams Streamlink plays
+    let plugin = if platform == Platform::Twitch && settings.proxy_enabled {
         Some(find_plugin(&app).ok_or(
             "The ad blocking plugin is missing, so StreamHub won't play this stream (it would have ads). \
              Reinstall StreamHub or install streamlink-ttvlol.",
@@ -437,7 +465,7 @@ pub fn watch(
     let session = Arc::new(Session::default());
     streams.sessions.lock().unwrap().insert(id, session.clone());
 
-    let runner = Runner { app, id, channel, settings, exe, plugin, session };
+    let runner = Runner { app, platform, id, channel, settings, exe, plugin, session };
     std::thread::spawn(move || runner.run());
     Ok(id)
 }
@@ -495,6 +523,21 @@ mod tests {
     }
 
     #[test]
+    fn kick_args() {
+        let mut s = settings();
+        s.quality = "720p60".into();
+        s.low_latency = true;
+        let rotation = ProxyRotation::new(vec![]);
+        let args = strings(build_args(Platform::Kick, "some-streamer", &s, None, &rotation));
+        assert_eq!(
+            args,
+            ["--loglevel", "info", "--title", "some-streamer - StreamHub", "https://kick.com/some-streamer", "720p60,best"]
+        );
+        assert!(valid_kick_slug("some-streamer_1"));
+        assert!(!valid_kick_slug("a/b"));
+    }
+
+    #[test]
     fn explains_errors() {
         let raw = "Unable to open URL: https://usher.ttvnw.net/api/v2/channel/hls/x.m3u8?sig=abc&token=%7B%7D \
                    (HTTPSConnectionPool(host='usher.ttvnw.net', port=443): Max retries exceeded with url: \
@@ -518,7 +561,7 @@ mod tests {
         s.backup_stream = true;
         let plugin = Plugin { dir: Some(PathBuf::from("plugins")), bundled: true };
         let rotation = ProxyRotation::new(vec!["https://a".into(), "https://b".into()]);
-        let args = strings(build_args("chan", &s, Some(&plugin), &rotation));
+        let args = strings(build_args(Platform::Twitch, "chan", &s, Some(&plugin), &rotation));
         assert_eq!(
             args,
             [
@@ -534,13 +577,13 @@ mod tests {
         let mut s = settings();
         let plugin = Plugin { dir: None, bundled: false };
         let rotation = ProxyRotation::new(vec!["https://a".into()]);
-        let args = strings(build_args("chan", &s, Some(&plugin), &rotation));
+        let args = strings(build_args(Platform::Twitch, "chan", &s, Some(&plugin), &rotation));
         assert!(!args.contains(&"--twitch-proxy-playlist-fallback".to_string()));
         assert!(!args.contains(&"--plugin-dirs".to_string()));
 
         s.direct = true;
         s.backup_stream = true; // needs the bundled plugin
-        let args = strings(build_args("chan", &s, Some(&plugin), &rotation));
+        let args = strings(build_args(Platform::Twitch, "chan", &s, Some(&plugin), &rotation));
         assert!(args.contains(&"--twitch-proxy-playlist-fallback".to_string()));
         assert!(!args.contains(&"--twitch-backup-stream".to_string()));
     }

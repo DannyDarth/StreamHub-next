@@ -7,10 +7,13 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { DEFAULTS, QUALITIES, loadSettings, saveSettings } from "./settings";
 import { AuthError, followedLive, thumbnail, validateToken } from "./twitch";
+import { loadKickSlugs, parseKickInput, saveKickSlugs } from "./kick";
 import type {
   AdblockStatus,
   EndedEvent,
+  KickChannel,
   LiveStream,
+  Platform,
   Settings,
   StatusEvent,
   StreamlinkInfo,
@@ -20,17 +23,21 @@ import type {
 const TOKEN_KEY = "streamhub.token";
 const REFRESH_MS = 60_000;
 
-type View = "live" | "settings";
+type View = "twitch" | "kick" | "settings";
 
 interface Playing {
+  platform: Platform;
   channel: string;
   status: AdblockStatus | null;
 }
 
+const savedToken = localStorage.getItem(TOKEN_KEY) ?? "";
+const savedKick = loadKickSlugs();
+
 const state = {
-  token: localStorage.getItem(TOKEN_KEY) ?? "",
+  token: savedToken,
   user: null as TwitchUser | null,
-  view: "live" as View,
+  view: (!savedToken && savedKick.length > 0 ? "kick" : "twitch") as View,
   settings: loadSettings(),
   streams: [] as LiveStream[],
   loading: false,
@@ -39,6 +46,11 @@ const state = {
   message: "",
   known: null as Set<string> | null,
   info: null as StreamlinkInfo | null,
+  kickSlugs: savedKick,
+  kickChannels: [] as KickChannel[],
+  kickLoading: false,
+  kickError: "",
+  kickKnown: null as Set<string> | null,
 };
 
 // ---- tiny DOM helper (text is always set with textContent) ----
@@ -94,24 +106,30 @@ function signOut() {
   render();
 }
 
-async function notifyNewStreams(streams: LiveStream[]) {
-  const live = new Set(streams.map((s) => s.user_id));
-  const before = state.known;
-  state.known = live;
-  if (!before || !state.settings.notifications) return;
-  const fresh = streams.filter((s) => !before.has(s.user_id));
-  if (fresh.length === 0) return;
+interface LiveItem {
+  key: string;
+  name: string;
+  detail: string;
+}
+
+/** Notify about channels that weren't live at the previous check. Returns the new "known" set. */
+async function notifyNew(items: LiveItem[], before: Set<string> | null, site: string): Promise<Set<string>> {
+  const live = new Set(items.map((i) => i.key));
+  if (!before || !state.settings.notifications) return live;
+  const fresh = items.filter((i) => !before.has(i.key));
+  if (fresh.length === 0) return live;
 
   let granted = await isPermissionGranted();
   if (!granted) granted = (await requestPermission()) === "granted";
-  if (!granted) return;
+  if (!granted) return live;
   if (fresh.length > 3) {
-    sendNotification({ title: "StreamHub", body: `${fresh.length} channels you follow went live` });
-    return;
+    sendNotification({ title: "StreamHub", body: `${fresh.length} of your ${site} channels went live` });
+    return live;
   }
-  for (const s of fresh) {
-    sendNotification({ title: `${s.user_name} is live`, body: s.title || s.game_name });
+  for (const item of fresh) {
+    sendNotification({ title: `${item.name} is live on ${site}`, body: item.detail });
   }
+  return live;
 }
 
 async function refresh() {
@@ -122,7 +140,11 @@ async function refresh() {
     const streams = await followedLive(state.token, state.user);
     state.streams = streams;
     state.error = "";
-    await notifyNewStreams(streams);
+    state.known = await notifyNew(
+      streams.map((st) => ({ key: st.user_id, name: st.user_name, detail: st.title || st.game_name })),
+      state.known,
+      "Twitch",
+    );
   } catch (e) {
     if (e instanceof AuthError) {
       signOut();
@@ -152,11 +174,57 @@ async function start() {
   await refresh();
 }
 
-async function watch(channel: string) {
+async function refreshKick() {
+  if (state.kickSlugs.length === 0) {
+    state.kickChannels = [];
+    render();
+    return;
+  }
+  state.kickLoading = true;
+  render();
+  try {
+    const channels = await invoke<KickChannel[]>("kick_channels", { slugs: state.kickSlugs });
+    state.kickChannels = channels;
+    state.kickError = "";
+    state.kickKnown = await notifyNew(
+      channels.filter((c) => c.live).map((c) => ({ key: c.slug, name: c.name, detail: c.title || c.category })),
+      state.kickKnown,
+      "Kick",
+    );
+  } catch (e) {
+    state.kickError = `Couldn't check your Kick channels: ${String(e)}`;
+  } finally {
+    state.kickLoading = false;
+    render();
+  }
+}
+
+function addKick(input: string): boolean {
+  const { slugs, invalid } = parseKickInput(input);
+  if (invalid.length > 0) {
+    state.kickError = `Not a Kick channel name: ${invalid.join(", ")}`;
+    render();
+    return false;
+  }
+  if (slugs.length === 0) return false;
+  state.kickError = "";
+  state.kickSlugs = saveKickSlugs([...state.kickSlugs, ...slugs]);
+  void refreshKick();
+  return true;
+}
+
+function removeKick(slug: string) {
+  state.kickSlugs = saveKickSlugs(state.kickSlugs.filter((s) => s !== slug));
+  state.kickChannels = state.kickChannels.filter((c) => c.slug !== slug);
+  state.kickKnown?.delete(slug);
+  render();
+}
+
+async function watch(platform: Platform, channel: string) {
   state.error = "";
   try {
-    const id = await invoke<number>("watch", { channel, settings: state.settings });
-    state.playing.set(id, { channel, status: null });
+    const id = await invoke<number>("watch", { platform, channel, settings: state.settings });
+    state.playing.set(id, { platform, channel, status: null });
   } catch (e) {
     state.error = String(e);
   }
@@ -203,7 +271,7 @@ function header(): HTMLElement {
     "header",
     {},
     h("div", { class: "brand" }, h("img", { class: "logo", src: "/icon.png", alt: "" }), "StreamHub"),
-    state.user ? h("nav", {}, tab("live", "Live"), tab("settings", "Settings")) : null,
+    h("nav", {}, tab("twitch", "Twitch"), tab("kick", "Kick"), tab("settings", "Settings")),
     h("div", { class: "spacer" }),
     state.user
       ? h(
@@ -216,8 +284,12 @@ function header(): HTMLElement {
   );
 }
 
-function statusChip(status: AdblockStatus | null): HTMLElement {
-  if (!status) return h("span", { class: "chip info" }, "Starting…");
+function statusChip(platform: Platform, status: AdblockStatus | null): HTMLElement {
+  if (!status) {
+    return platform === "kick"
+      ? h("span", { class: "chip kick", title: "Kick doesn't put ads into the streams Streamlink plays" }, "Kick")
+      : h("span", { class: "chip info" }, "Starting…");
+  }
   return h(
     "span",
     { class: `chip ${status.level}`, title: status.detail },
@@ -236,7 +308,7 @@ function playingBar(): HTMLElement | null {
         "div",
         { class: "playing-item" },
         h("strong", {}, p.channel),
-        statusChip(p.status),
+        statusChip(p.platform, p.status),
         p.status && (p.status.adsCovered || p.status.adsGotThrough)
           ? h(
               "span",
@@ -253,7 +325,7 @@ function playingBar(): HTMLElement | null {
 function card(stream: LiveStream): HTMLElement {
   return h(
     "button",
-    { class: "card", title: `Watch ${stream.user_name}`, onclick: () => void watch(stream.user_login) },
+    { class: "card", title: `Watch ${stream.user_name}`, onclick: () => void watch("twitch", stream.user_login) },
     h(
       "div",
       { class: "thumb" },
@@ -276,10 +348,101 @@ function liveView(): HTMLElement {
     h(
       "div",
       { class: "toolbar" },
-      h("h1", {}, "Following · Live"),
+      h("h1", {}, "Twitch · Following live"),
       h("button", { class: "small", onclick: () => void refresh(), disabled: state.loading }, state.loading ? "Refreshing…" : "Refresh"),
     ),
     list,
+  );
+}
+
+function kickCard(channel: KickChannel): HTMLElement {
+  return h(
+    "div",
+    { class: "card-wrap" },
+    h(
+      "button",
+      { class: "card", title: `Watch ${channel.name}`, onclick: () => void watch("kick", channel.slug) },
+      h(
+        "div",
+        { class: "thumb" },
+        channel.thumbnail ? h("img", { src: channel.thumbnail, alt: "", loading: "lazy" }) : null,
+        h("span", { class: "viewers kick" }, `● ${channel.viewers === null ? "Live" : channel.viewers.toLocaleString()}`),
+      ),
+      h("div", { class: "card-title" }, channel.title || "Untitled stream"),
+      h("div", { class: "card-meta" }, h("strong", {}, channel.name), channel.category ? ` · ${channel.category}` : ""),
+    ),
+    h("button", { class: "remove", title: `Remove ${channel.name}`, onclick: () => removeKick(channel.slug) }, "×"),
+  );
+}
+
+function kickRow(slug: string, channel: KickChannel | undefined): HTMLElement {
+  const status = !channel
+    ? state.kickLoading
+      ? "Checking…"
+      : ""
+    : channel.error
+      ? channel.error
+      : "Offline";
+  return h(
+    "div",
+    { class: "row" },
+    channel?.avatar ? h("img", { class: "avatar", src: channel.avatar, alt: "" }) : h("span", { class: "avatar" }),
+    h("strong", {}, channel?.name ?? slug),
+    h("span", { class: channel?.error ? "row-error" : "muted" }, status),
+    h("button", { class: "link", onclick: () => removeKick(slug) }, "Remove"),
+  );
+}
+
+function kickView(): HTMLElement {
+  const bySlug = new Map(state.kickChannels.map((c) => [c.slug, c]));
+  const live = state.kickSlugs
+    .map((slug) => bySlug.get(slug))
+    .filter((c): c is KickChannel => Boolean(c?.live))
+    .sort((a, b) => (b.viewers ?? 0) - (a.viewers ?? 0));
+  const others = state.kickSlugs.filter((slug) => !bySlug.get(slug)?.live);
+
+  const input = h("input", {
+    type: "text",
+    placeholder: "Add Kick channels: names or kick.com links",
+    spellcheck: "false",
+  });
+  const form = h(
+    "form",
+    {
+      class: "add",
+      onsubmit: (e) => {
+        e.preventDefault();
+        if (addKick(input.value)) input.value = "";
+      },
+    },
+    input,
+    h("button", { class: "small", type: "submit" }, "Add"),
+  );
+
+  return h(
+    "main",
+    {},
+    h(
+      "div",
+      { class: "toolbar" },
+      h("h1", {}, "Kick · Your channels"),
+      h(
+        "button",
+        { class: "small", onclick: () => void refreshKick(), disabled: state.kickLoading },
+        state.kickLoading ? "Refreshing…" : "Refresh",
+      ),
+    ),
+    form,
+    state.kickError ? h("p", { class: "row-error" }, state.kickError) : null,
+    state.kickSlugs.length === 0
+      ? h("p", { class: "empty" }, "Add the Kick channels you watch. StreamHub checks them every minute and tells you when they go live.")
+      : null,
+    live.length > 0 ? h("div", { class: "grid" }, ...live.map(kickCard)) : null,
+    live.length === 0 && state.kickSlugs.length > 0 && !state.kickLoading
+      ? h("p", { class: "empty" }, "None of your Kick channels are live right now.")
+      : null,
+    others.length > 0 ? h("h2", {}, "Offline") : null,
+    others.length > 0 ? h("div", { class: "rows" }, ...others.map((slug) => kickRow(slug, bySlug.get(slug)))) : null,
   );
 }
 
@@ -379,7 +542,7 @@ function settingsView(): HTMLElement {
     checkbox("Ad blocking badge", "Show the status in the corner of the player.", "badge"),
 
     h("h2", {}, "Notifications"),
-    checkbox("Live notifications", "Notify me when a channel I follow goes live.", "notifications"),
+    checkbox("Live notifications", "Notify me when a Twitch channel I follow or one of my Kick channels goes live.", "notifications"),
 
     h(
       "p",
@@ -411,23 +574,29 @@ function signInView(): HTMLElement {
 }
 
 let currentBody: HTMLElement | null = null;
+let currentView: View | null = null;
 
 function render() {
-  // don't rebuild the settings form while the user is typing in it
+  // don't rebuild a form while the user is typing in it
+  const active = document.activeElement;
   const editing =
-    state.view === "settings" &&
-    currentBody?.classList.contains("settings") &&
-    currentBody.contains(document.activeElement) &&
-    document.activeElement !== document.body;
+    currentView === state.view &&
+    (state.view === "settings" || state.view === "kick") &&
+    active instanceof HTMLElement &&
+    ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName) &&
+    Boolean(currentBody?.contains(active));
   const body =
     editing && currentBody
       ? currentBody
-      : !state.user
-        ? signInView()
-        : state.view === "settings"
-          ? settingsView()
-          : liveView();
+      : state.view === "settings"
+        ? settingsView()
+        : state.view === "kick"
+          ? kickView()
+          : state.user
+            ? liveView()
+            : signInView();
   currentBody = body;
+  currentView = state.view;
   app.replaceChildren(
     header(),
     state.error ? h("div", { class: "banner error" }, state.error) : "",
@@ -453,5 +622,9 @@ void listen<EndedEvent>("stream-ended", ({ payload }) => {
   render();
 });
 
-window.setInterval(() => void refresh(), REFRESH_MS);
+window.setInterval(() => {
+  void refresh();
+  void refreshKick();
+}, REFRESH_MS);
 void start();
+void refreshKick();

@@ -60,3 +60,19 @@ export interface LiveStream {
   started_at: string;
   thumbnail_url: string;
 }
+
+export type Platform = "twitch" | "kick";
+
+/** Sent by the Rust side (kick::KickChannel). */
+export interface KickChannel {
+  slug: string;
+  name: string;
+  live: boolean;
+  title: string;
+  category: string;
+  viewers: number | null;
+  thumbnail: string | null;
+  avatar: string | null;
+  startedAt: string | null;
+  error: string | null;
+}
