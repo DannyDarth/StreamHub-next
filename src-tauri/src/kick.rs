@@ -144,7 +144,8 @@ fn fetcher_navigation(app: &AppHandle, url: &tauri::Url) -> bool {
         }
         if let (Some(id), Some(data)) = (id, data) {
             let fetcher = app.state::<KickFetcher>();
-            if let Some(tx) = fetcher.pending.lock().unwrap().remove(&id) {
+            let tx = fetcher.pending.lock().unwrap().remove(&id);
+            if let Some(tx) = tx {
                 let _ = tx.send(data);
             }
         }
