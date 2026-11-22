@@ -65,11 +65,28 @@ struct Session {
 }
 
 impl Session {
+    /// Stop Streamlink together with the video player it started.
     fn kill(&self) {
         if let Some(child) = self.child.lock().unwrap().as_mut() {
-            let _ = child.kill();
+            kill_tree(child);
         }
     }
+}
+
+/// Killing only Streamlink leaves its player running, so kill the whole process tree.
+fn kill_tree(child: &mut Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .status();
+    }
+    let _ = child.kill();
 }
 
 #[derive(Default)]
