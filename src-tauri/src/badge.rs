@@ -4,6 +4,8 @@
 #[cfg(windows)]
 use std::time::Duration;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::adblock::Status;
@@ -14,8 +16,7 @@ pub const TITLE: &str = "StreamHub ad blocking badge";
 /// Finds the first visible top-level window of Streamlink or its descendants (Streamlink starts the
 /// player as a child process) and shows the badge window (found by its title) in that window's
 /// top-right corner, inside the monitor's work area, without taking the focus.
-/// With STREAMHUB_FALLBACK=1 and no player window it uses the top-right corner of the monitor the
-/// badge is on. Prints "moved", "placed", "no-player" or "no-badge".
+/// Prints "moved", "no-player" or "no-badge".
 #[cfg(windows)]
 const SCRIPT: &str = r#"
 $ErrorActionPreference = 'SilentlyContinue'
@@ -49,19 +50,14 @@ foreach ($id in $ids) {
 	$p = Get-Process -Id $id
 	if ($p -and $p.MainWindowHandle -ne 0 -and [StreamHubWin32]::IsWindowVisible($p.MainWindowHandle)) { $player = $p.MainWindowHandle; break }
 }
-$result = 'moved'
+if ($player -eq [IntPtr]::Zero) { 'no-player'; exit }
 $anchor = $player
-if ($player -eq [IntPtr]::Zero) {
-	if ($env:STREAMHUB_FALLBACK -ne '1') { 'no-player'; exit }
-	$anchor = $badge
-	$result = 'placed'
-}
 $info = New-Object StreamHubWin32+MONITORINFO
 $info.cbSize = [Runtime.InteropServices.Marshal]::SizeOf($info)
 [StreamHubWin32]::GetMonitorInfo([StreamHubWin32]::MonitorFromWindow($anchor, 2), [ref]$info) | Out-Null
 $work = $info.rcWork
 $pr = New-Object StreamHubWin32+RECT
-if ($player -ne [IntPtr]::Zero) { [StreamHubWin32]::GetWindowRect($player, [ref]$pr) | Out-Null } else { $pr = $work }
+[StreamHubWin32]::GetWindowRect($player, [ref]$pr) | Out-Null
 $dpi = [StreamHubWin32]::GetDpiForWindow($anchor); if (-not $dpi) { $dpi = 96 }
 $margin = [int](16 * $dpi / 96)
 # twice: Windows may rescale the badge when it moves to a monitor with different scaling
@@ -76,7 +72,7 @@ for ($pass = 0; $pass -lt 2; $pass++) {
 	# HWND_TOPMOST, SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
 	[StreamHubWin32]::SetWindowPos($badge, [IntPtr](-1), $x, $y, 0, 0, 0x0051) | Out-Null
 }
-$result
+'moved'
 "#;
 
 /// Create the (hidden) badge window. It loads now so it's ready when the first stream starts.
@@ -98,7 +94,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
 }
 
 #[cfg(windows)]
-fn run_script(pid: u32, fallback: bool) -> String {
+fn run_script(pid: u32) -> String {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -106,7 +102,6 @@ fn run_script(pid: u32, fallback: bool) -> String {
         .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", SCRIPT])
         .env("STREAMHUB_PID", pid.to_string())
         .env("STREAMHUB_BADGE_TITLE", TITLE)
-        .env("STREAMHUB_FALLBACK", if fallback { "1" } else { "0" })
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map(|out| {
@@ -121,28 +116,42 @@ fn run_script(pid: u32, fallback: bool) -> String {
         .unwrap_or_else(|_| "error".into())
 }
 
+/// Bumped by every `show`: an older placement attempt stops when a newer one starts.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// How long to wait for the player's window. Streamlink first finds an ad-free proxy and only
+/// then starts the player, which can take a while on a slow proxy.
+#[cfg(windows)]
+const PLAYER_WAIT: Duration = Duration::from_secs(90);
+
 /// Update the badge and show it on the player's window (Streamlink's process `pid`).
+/// The badge is only shown on the player: until the player's window exists, the status is only
+/// shown in StreamHub's own window, so the badge never covers StreamHub.
 pub fn show(app: &AppHandle, pid: u32, status: &Status) {
     let _ = app.emit_to(LABEL, "badge-status", status);
-    let app = app.clone();
-    std::thread::spawn(move || {
-        #[cfg(windows)]
-        {
-            // the player's window may not exist yet right after Streamlink starts it
-            for attempt in 1..=4 {
-                let last = attempt == 4;
-                match run_script(pid, last).as_str() {
-                    "moved" | "placed" => return,
-                    "no-player" if !last => std::thread::sleep(Duration::from_millis(1500)),
+    let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    #[cfg(windows)]
+    {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + PLAYER_WAIT;
+            while GENERATION.load(Ordering::SeqCst) == generation {
+                match run_script(pid).as_str() {
+                    "moved" => return,
+                    "no-player" if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(1000))
+                    }
                     _ => break,
                 }
             }
-        }
-        // the script couldn't show it: show it where it is
-        if let Some(window) = app.get_webview_window(LABEL) {
-            let _ = window.show();
-        }
-    });
+            // no player window (or a newer status took over): keep the badge hidden
+            if GENERATION.load(Ordering::SeqCst) == generation {
+                hide(&app);
+            }
+        });
+    }
+    #[cfg(not(windows))]
+    let _ = generation;
 }
 
 pub fn hide(app: &AppHandle) {

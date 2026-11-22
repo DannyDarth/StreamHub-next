@@ -202,7 +202,7 @@ function header(): HTMLElement {
   return h(
     "header",
     {},
-    h("div", { class: "brand" }, h("span", { class: "logo" }, "▶"), "StreamHub"),
+    h("div", { class: "brand" }, h("img", { class: "logo", src: "/icon.png", alt: "" }), "StreamHub"),
     state.user ? h("nav", {}, tab("live", "Live"), tab("settings", "Settings")) : null,
     h("div", { class: "spacer" }),
     state.user
