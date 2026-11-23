@@ -204,8 +204,30 @@ const STREAMS: &str = r#"
         .map(Number).find((n) => Number.isFinite(n) && n > 0) ?? null,
       thumbnail: img(row.thumbnail) || img(row.thumbnail_url),
       category: (row.categories && row.categories[0] && row.categories[0].name) || (row.category && row.category.name) || "",
+      avatar: img(user.profile_pic) || img(ch.profile_pic),
+      lid: row.id || (ch.livestream && ch.livestream.id) || null,
     });
   }
+  // the directory usually has no viewer counts: ask Kick for them, 25 streams at a time
+  const need = items.filter((i) => i.viewers === null && i.lid);
+  for (let i = 0; i < need.length; i += 25) {
+    const part = need.slice(i, i + 25);
+    const q = part.map((p) => "ids[]=" + encodeURIComponent(p.lid)).join("&");
+    try {
+      const r = await fetch(`/current-viewers?${q}`, { headers: { Accept: "application/json" } });
+      if (!r.ok) continue;
+      const rows = await r.json();
+      if (!Array.isArray(rows)) continue;
+      for (const e of rows) {
+        const item = part.find((p) => String(p.lid) === String(e.livestream_id));
+        const n = Number(e.viewers);
+        if (item && e.show_view_count !== false && Number.isFinite(n) && n >= 0) item.viewers = n;
+      }
+    } catch (e) {
+      // keep "Live" for these
+    }
+  }
+  items.forEach((i) => delete i.lid);
   items.sort((a, b) => (b.viewers || 0) - (a.viewers || 0));
   return { status: 200, items };
 "#;

@@ -126,4 +126,5 @@ export interface KickStream {
   viewers: number | null;
   thumbnail: string | null;
   category: string;
+  avatar?: string | null;
 }

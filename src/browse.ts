@@ -151,6 +151,8 @@ function streamCard(opts: {
   detail: string;
   viewers: number | null;
   image: string | null;
+  /** Shown when the stream's picture doesn't load (Kick has none for new streams). */
+  fallback?: string | null;
   onName: () => void;
   ctx: Ctx;
 }): HTMLElement {
@@ -164,7 +166,24 @@ function streamCard(opts: {
       h(
         "div",
         { class: "thumb" },
-        opts.image ? h("img", { src: opts.image, alt: "", loading: "lazy", referrerpolicy: "no-referrer" }) : null,
+        opts.image || opts.fallback
+          ? h("img", {
+              src: (opts.image || opts.fallback)!,
+              class: opts.image ? undefined : "fallback",
+              alt: "",
+              loading: "lazy",
+              referrerpolicy: "no-referrer",
+              onerror: (e) => {
+                const img = e.target as HTMLImageElement;
+                if (opts.fallback && !img.classList.contains("fallback")) {
+                  img.classList.add("fallback");
+                  img.src = opts.fallback;
+                } else {
+                  img.remove();
+                }
+              },
+            })
+          : null,
         h("span", { class: `viewers${opts.platform === "kick" ? " kick" : ""}` }, `● ${viewers(opts.viewers)}`),
       ),
       h("div", { class: "card-title" }, opts.title || "Untitled stream"),
@@ -411,6 +430,7 @@ function kickStreamCard(ctx: Ctx, s: KickStream, showCategory = true): HTMLEleme
     detail: showCategory ? s.category : "",
     viewers: s.viewers,
     image: s.thumbnail,
+    fallback: s.avatar ?? null,
     onName: () => {
       go("kick", { kind: "channel", slug: s.slug });
       ctx.render();
@@ -559,6 +579,7 @@ function kickChannel(ctx: Ctx, slug: string): HTMLElement {
             viewers: c.viewers,
             thumbnail: c.thumbnail,
             category: c.category,
+            avatar: c.avatar,
           }),
         )
       : null,
