@@ -41,6 +41,8 @@ export type KickPage =
 export interface Ctx {
   render(): void;
   token(): string;
+  /** Browse pages' language filter ("" = all). */
+  language(): string;
   watch(platform: Platform, channel: string): void;
   openChat(platform: Platform, channel: string): void;
   chatEnabled(): boolean;
@@ -122,6 +124,11 @@ function load<T>(ctx: Ctx, key: string, fetcher: () => Promise<T>): Entry {
       });
   }
   return entry!;
+}
+
+/** Forget everything loaded (e.g. after the language filter changed). */
+export function clearCache(): void {
+  cache.clear();
 }
 
 export function refreshPage(site: Platform): void {
@@ -232,7 +239,8 @@ export function twitchStreamCard(ctx: Ctx, s: LiveStream, showGame = true): HTML
 
 function twitchBrowse(ctx: Ctx): HTMLElement {
   const games = load(ctx, "twitch:browse:games", () => topGames(ctx.token()));
-  const streams = load(ctx, "twitch:browse:streams", () => topStreams(ctx.token()));
+  const lang = ctx.language();
+  const streams = load(ctx, `twitch:browse:streams:${lang}`, () => topStreams(ctx.token(), lang));
   const gameList = (games.data as TwitchGame[] | null) ?? [];
   const streamList = (streams.data as LiveStream[] | null) ?? [];
   return h(
@@ -263,7 +271,8 @@ function twitchBrowse(ctx: Ctx): HTMLElement {
 }
 
 function twitchGame(ctx: Ctx, id: string, name: string): HTMLElement {
-  const entry = load(ctx, `twitch:game:${id}`, () => gameStreams(ctx.token(), id));
+  const lang = ctx.language();
+  const entry = load(ctx, `twitch:game:${id}:${lang}`, () => gameStreams(ctx.token(), id, lang));
   const list = (entry.data as LiveStream[] | null) ?? [];
   return section(
     name,
@@ -412,8 +421,8 @@ export function twitchContent(ctx: Ctx): HTMLElement | null {
 
 // ---- Kick pages ----
 
-function kickStreams(slug: string | null): Promise<KickStream[]> {
-  return invoke<KickStream[]>("kick_browse", { kind: "streams", slug });
+function kickStreams(slug: string | null, language: string): Promise<KickStream[]> {
+  return invoke<KickStream[]>("kick_browse", { kind: "streams", slug, language: language || null });
 }
 
 function kickCategories(): Promise<KickCategory[]> {
@@ -447,7 +456,8 @@ function kickCategoryCard(ctx: Ctx, c: KickCategory): HTMLElement {
 
 function kickBrowse(ctx: Ctx): HTMLElement {
   const cats = load(ctx, "kick:browse:categories", kickCategories);
-  const streams = load(ctx, "kick:browse:streams", () => kickStreams(null));
+  const lang = ctx.language();
+  const streams = load(ctx, `kick:browse:streams:${lang}`, () => kickStreams(null, lang));
   const catList = (cats.data as KickCategory[] | null) ?? [];
   const streamList = (streams.data as KickStream[] | null) ?? [];
   return h(
@@ -467,7 +477,8 @@ function kickBrowse(ctx: Ctx): HTMLElement {
 }
 
 function kickCategory(ctx: Ctx, slug: string, name: string): HTMLElement {
-  const entry = load(ctx, `kick:category:${slug}`, () => kickStreams(slug));
+  const lang = ctx.language();
+  const entry = load(ctx, `kick:category:${slug}:${lang}`, () => kickStreams(slug, lang));
   const list = (entry.data as KickStream[] | null) ?? [];
   return section(
     name,

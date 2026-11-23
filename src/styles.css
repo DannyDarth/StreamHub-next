@@ -326,3 +326,23 @@ body.with-chat .banner, body.with-chat .playing { margin-right: calc(340px + 20p
 .card { width: 100%; }
 .card-wrap { min-width: 0; }
 .card-wrap .card-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Light theme (Settings → Appearance) */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f7f7f8;
+  --panel: #ffffff;
+  --panel-2: #efeff1;
+  --line: #dedee3;
+  --text: #0e0e10;
+  --muted: #53535f;
+  --accent: #9147ff;
+  --accent-2: #772ce8;
+  --ok: #008a4b;
+  --warn: #a15c00;
+  --error: #d92d20;
+  --kick: #248a07;
+}
+:root[data-theme="light"] .banner.error { color: var(--error); }
+:root[data-theme="light"] .primary { color: #fff; }
+.field small { font-size: 12.5px; }

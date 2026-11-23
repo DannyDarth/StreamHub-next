@@ -46,6 +46,22 @@ pub struct WatchSettings {
     pub backup_stream: bool,
     #[serde(default = "yes")]
     pub badge: bool,
+    /// "normal", "more" or "most": how many seconds of video Streamlink keeps buffered.
+    #[serde(default)]
+    pub buffer: Option<String>,
+}
+
+/// Streamlink's buffering options for the "Smoother playback" setting. More buffer means fewer
+/// stutters on unsteady connections, a few seconds further behind live.
+pub fn buffer_args(buffer: Option<&str>, low_latency: bool) -> &'static [&'static str] {
+    if low_latency {
+        return &[];
+    }
+    match buffer {
+        Some("more") => &["--hls-live-edge", "6", "--stream-segment-threads", "2"],
+        Some("most") => &["--hls-live-edge", "10", "--stream-segment-threads", "3"],
+        _ => &[],
+    }
 }
 
 fn default_quality() -> String {
@@ -246,9 +262,11 @@ pub fn build_args(
     }
     args.push("--title".into());
     args.push(format!("{channel} - StreamHub").into());
-    if platform == Platform::Twitch && settings.low_latency {
+    let low_latency = platform == Platform::Twitch && settings.low_latency;
+    if low_latency {
         args.push("--twitch-low-latency".into());
     }
+    args.extend(buffer_args(settings.buffer.as_deref(), low_latency).iter().map(OsString::from));
     if let Some(plugin) = plugin {
         if let Some(dir) = &plugin.dir {
             args.push("--plugin-dirs".into());
@@ -520,6 +538,18 @@ mod tests {
         assert!(!valid_channel(""));
         assert!(valid_quality("720p60,best"));
         assert!(!valid_quality("best --player=calc"));
+    }
+
+    #[test]
+    fn buffer_settings() {
+        assert!(buffer_args(None, false).is_empty());
+        assert!(buffer_args(Some("normal"), false).is_empty());
+        assert_eq!(buffer_args(Some("more"), false)[..2], ["--hls-live-edge", "6"]);
+        assert!(buffer_args(Some("most"), true).is_empty(), "low latency keeps its own buffer");
+        let mut s = settings();
+        s.buffer = Some("most".into());
+        let args = strings(build_args(Platform::Kick, "x", &s, None, &ProxyRotation::new(vec![])));
+        assert!(args.windows(2).any(|w| w == ["--hls-live-edge", "10"]));
     }
 
     #[test]

@@ -5,7 +5,15 @@ import {
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
-import { DEFAULTS, QUALITIES, loadSettings, saveSettings } from "./settings";
+import {
+  DEFAULTS,
+  LANGUAGES,
+  QUALITIES,
+  applyTheme,
+  followSystemTheme,
+  loadSettings,
+  saveSettings,
+} from "./settings";
 import { AuthError, followedLive, validateToken } from "./twitch";
 import { loadKickSlugs, parseKickInput, saveKickSlugs } from "./kick";
 import { h } from "./ui";
@@ -251,6 +259,30 @@ async function stop(id: number) {
 function updateSettings(patch: Partial<Settings>) {
   state.settings = { ...state.settings, ...patch };
   saveSettings(state.settings);
+  if (patch.theme) applyTheme(state.settings.theme);
+  if (patch.streamLanguage !== undefined) browse.clearCache();
+}
+
+function select<K extends "theme" | "buffer" | "streamLanguage" | "chatProvider">(
+  label: string,
+  key: K,
+  options: readonly (readonly [string, string])[],
+  help = "",
+): HTMLElement {
+  return h(
+    "label",
+    { class: "field" },
+    h("span", {}, label),
+    h(
+      "select",
+      {
+        onchange: (e) =>
+          updateSettings({ [key]: (e.target as HTMLSelectElement).value } as Partial<Settings>),
+      },
+      ...options.map(([value, text]) => h("option", { value, selected: state.settings[key] === value }, text)),
+    ),
+    help ? h("small", { class: "muted" }, help) : null,
+  );
 }
 
 async function loadInfo() {
@@ -269,6 +301,7 @@ async function loadInfo() {
 const ctx: browse.Ctx = {
   render: () => render(),
   token: () => state.token,
+  language: () => state.settings.streamLanguage,
   watch: (platform, channel) => void watch(platform, channel),
   openChat: (platform, channel) => void openChat(platform, channel),
   chatEnabled: () => state.settings.chatEnabled,
@@ -620,7 +653,17 @@ function settingsView(): HTMLElement {
     textInput("Streamlink path (optional)", "streamlinkPath", "Found automatically"),
     textInput("Video player (optional)", "playerPath", "Streamlink's default (VLC)"),
     h("label", { class: "field" }, h("span", {}, "Quality"), quality),
-    checkbox("Low latency", "Smaller delay, may buffer more often.", "lowLatency"),
+    checkbox("Low latency", "Smaller delay, may buffer more often (Twitch).", "lowLatency"),
+    select(
+      "Smoother playback",
+      "buffer",
+      [
+        ["normal", "Normal"],
+        ["more", "More buffer (fewer stutters, a few seconds behind)"],
+        ["most", "Most buffer (for unsteady connections)"],
+      ],
+      "Keeps more video buffered so short hiccups don't stutter. Not used with low latency.",
+    ),
 
     h("h2", {}, "Twitch ad blocking"),
     h(
@@ -672,6 +715,16 @@ function settingsView(): HTMLElement {
       ? checkbox("Open chat with the stream", "Open the channel's chat when a stream starts.", "chatAutoOpen")
       : null,
 
+    h("h2", {}, "Browse"),
+    select("Stream language", "streamLanguage", LANGUAGES, "Top live streams and categories only show streams in this language."),
+
+    h("h2", {}, "Appearance"),
+    select("Theme", "theme", [
+      ["dark", "Dark"],
+      ["light", "Light"],
+      ["system", "Same as Windows"],
+    ]),
+
     h("h2", {}, "Notifications"),
     checkbox("Live notifications", "Notify me when a Twitch channel I follow or one of my Kick channels goes live.", "notifications"),
 
@@ -685,6 +738,8 @@ function settingsView(): HTMLElement {
           onclick: () => {
             state.settings = { ...DEFAULTS };
             saveSettings(state.settings);
+            applyTheme(state.settings.theme);
+            browse.clearCache();
             render();
           },
         },
@@ -784,5 +839,7 @@ window.setInterval(() => {
   void refresh();
   void refreshKick();
 }, REFRESH_MS);
+applyTheme(state.settings.theme);
+followSystemTheme(() => state.settings.theme);
 void start();
 void refreshKick();

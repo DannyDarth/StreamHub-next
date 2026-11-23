@@ -20,7 +20,7 @@ The StreamHub desktop app rebuilt with [Tauri 2](https://tauri.app): a Rust core
 - Watching through Streamlink, with the ad blocking above and a status bar per stream
 - Chat (optional, off by default: Settings → Chat) for Twitch and Kick: in a panel on the right of StreamHub (the sites' own popout chat; sign in there to send messages), your default browser, or Chatterino; optionally opened with the stream
 - Browse and search: top categories and live streams, category pages and channel pages for Twitch and Kick (Kick has no channel search: StreamHub looks up the exact name)
-- Settings: Streamlink path, player, quality, low latency, proxies, VPN mode, backup stream, badge
+- Settings: theme (dark, light, same as Windows), smoother playback (more buffering), browse language filter, Streamlink path, player, quality, low latency, proxies, VPN mode, backup stream, badge
 - Tray icon (closing the window keeps StreamHub running)
 
 Next: the rest of StreamHub 1.x (videos, clips, more settings).

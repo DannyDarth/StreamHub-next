@@ -128,16 +128,22 @@ const PLAYER_WAIT: Duration = Duration::from_secs(90);
 /// The badge is only shown on the player: until the player's window exists, the status is only
 /// shown in StreamHub's own window, so the badge never covers StreamHub.
 pub fn show(app: &AppHandle, pid: u32, status: &Status) {
-    let _ = app.emit_to(LABEL, "badge-status", status);
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     #[cfg(windows)]
     {
         let app = app.clone();
+        let status = status.clone();
         std::thread::spawn(move || {
             let deadline = std::time::Instant::now() + PLAYER_WAIT;
             while GENERATION.load(Ordering::SeqCst) == generation {
                 match run_script(pid).as_str() {
-                    "moved" => return,
+                    "moved" => {
+                        // Only now hand the status to the badge: it starts fading out when it gets
+                        // one, so sending it earlier (before the player had opened) made it fade
+                        // out before it was ever shown.
+                        let _ = app.emit_to(LABEL, "badge-status", &status);
+                        return;
+                    }
                     "no-player" if std::time::Instant::now() < deadline => {
                         std::thread::sleep(Duration::from_millis(1000))
                     }
@@ -151,7 +157,10 @@ pub fn show(app: &AppHandle, pid: u32, status: &Status) {
         });
     }
     #[cfg(not(windows))]
-    let _ = generation;
+    {
+        let _ = (generation, pid);
+        let _ = app.emit_to(LABEL, "badge-status", status);
+    }
 }
 
 pub fn hide(app: &AppHandle) {

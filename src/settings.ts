@@ -20,7 +20,39 @@ export const DEFAULTS: Settings = {
   chatEnabled: false,
   chatProvider: "panel",
   chatAutoOpen: false,
+  theme: "dark",
+  buffer: "normal",
+  streamLanguage: "",
 };
+
+/** Languages for the browse pages' filter. */
+export const LANGUAGES: [string, string][] = [
+  ["", "All languages"],
+  ["en", "English"],
+  ["es", "Spanish"],
+  ["pt", "Portuguese"],
+  ["fr", "French"],
+  ["de", "German"],
+  ["it", "Italian"],
+  ["ru", "Russian"],
+  ["tr", "Turkish"],
+  ["ar", "Arabic"],
+  ["ja", "Japanese"],
+  ["ko", "Korean"],
+  ["zh", "Chinese"],
+];
+
+const systemDark = window.matchMedia("(prefers-color-scheme: dark)");
+
+/** Apply the theme setting (and follow Windows when it's "system"). */
+export function applyTheme(theme: Settings["theme"]): void {
+  const dark = theme === "dark" || (theme === "system" && systemDark.matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+}
+
+export function followSystemTheme(get: () => Settings["theme"]): void {
+  systemDark.addEventListener("change", () => applyTheme(get()));
+}
 
 export function loadSettings(): Settings {
   try {

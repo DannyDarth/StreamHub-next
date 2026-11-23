@@ -174,14 +174,15 @@ const CATEGORIES: &str = r#"
   };
 "#;
 
-/// Live streams, most viewers first: all of Kick or one category (__SLUG__ is a JSON string or null).
+/// Live streams, most viewers first: all of Kick or one category (__SLUG__ is a JSON string or
+/// null), in one language (__LANG__ is a JSON string, "en" by default like kick.com).
 const STREAMS: &str = r#"
   const sub = __SLUG__;
   const pages = await Promise.all([1, 2].map(async (n) => {
     // sort=desc: most viewers first (without it Kick lists streams in no useful order)
     const q = new URLSearchParams({ page: String(n), limit: "24", sort: "desc" });
     if (sub) q.set("subcategory", sub);
-    const r = await fetch(`/stream/livestreams/en?${q}`, { headers: { Accept: "application/json" } });
+    const r = await fetch(`/stream/livestreams/${__LANG__}?${q}`, { headers: { Accept: "application/json" } });
     if (!r.ok) return { status: r.status, rows: [] };
     const p = await r.json();
     return { status: 200, rows: Array.isArray(p) ? p : (p.data || p.livestreams || []) };
@@ -340,14 +341,24 @@ async fn run_in_kick(app: &AppHandle, body: &str) -> Result<String, String> {
 
 /// Browse Kick: "categories", or "streams" (live streams, of one category when `slug` is given).
 #[tauri::command]
-pub async fn kick_browse(app: AppHandle, kind: String, slug: Option<String>) -> Result<Value, String> {
+pub async fn kick_browse(
+    app: AppHandle,
+    kind: String,
+    slug: Option<String>,
+    language: Option<String>,
+) -> Result<Value, String> {
     let slug = slug.map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
     if slug.as_deref().is_some_and(|s| !valid_kick_slug(s)) {
         return Err("Invalid category".into());
     }
+    let language = language
+        .filter(|l| l.len() == 2 && l.chars().all(|c| c.is_ascii_lowercase()))
+        .unwrap_or_else(|| "en".into());
     let body = match kind.as_str() {
         "categories" => CATEGORIES.to_string(),
-        "streams" => STREAMS.replace("__SLUG__", &serde_json::to_string(&slug).unwrap()),
+        "streams" => STREAMS
+            .replace("__SLUG__", &serde_json::to_string(&slug).unwrap())
+            .replace("__LANG__", &serde_json::to_string(&language).unwrap()),
         _ => return Err("Unknown Kick page".into()),
     };
     let data = run_in_kick(&app, &body).await?;

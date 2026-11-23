@@ -59,12 +59,16 @@ export async function topGames(token: string): Promise<TwitchGame[]> {
 }
 
 /** Live streams in a category, most viewers first. */
-export async function gameStreams(token: string, gameId: string): Promise<LiveStream[]> {
-  return (await helix<{ data: LiveStream[] }>(token, "streams", { game_id: gameId, first: "60" })).data;
+export async function gameStreams(token: string, gameId: string, language = ""): Promise<LiveStream[]> {
+  const params: Record<string, string> = { game_id: gameId, first: "60" };
+  if (language) params.language = language;
+  return (await helix<{ data: LiveStream[] }>(token, "streams", params)).data;
 }
 
-export async function topStreams(token: string): Promise<LiveStream[]> {
-  return (await helix<{ data: LiveStream[] }>(token, "streams", { first: "60" })).data;
+export async function topStreams(token: string, language = ""): Promise<LiveStream[]> {
+  const params: Record<string, string> = { first: "60" };
+  if (language) params.language = language;
+  return (await helix<{ data: LiveStream[] }>(token, "streams", params)).data;
 }
 
 export async function searchChannels(token: string, query: string): Promise<TwitchChannelResult[]> {

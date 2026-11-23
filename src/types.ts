@@ -45,6 +45,11 @@ export interface Settings {
   chatEnabled: boolean;
   chatProvider: ChatProvider;
   chatAutoOpen: boolean;
+  theme: "dark" | "light" | "system";
+  /** Smoother playback: how much video Streamlink keeps buffered. */
+  buffer: "normal" | "more" | "most";
+  /** Browse pages: only streams in this language ("" = all). */
+  streamLanguage: string;
 }
 
 export type ChatProvider = "panel" | "browser" | "chatterino";
