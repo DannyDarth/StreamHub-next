@@ -31,6 +31,10 @@ pub fn run() {
             badge::badge_hide,
             kick::kick_channels,
             kick::kick_browse,
+            kick::kick_account,
+            kick::kick_followed,
+            kick::kick_login,
+            kick::kick_logout,
             chat::open_chat,
             chat::close_chat,
         ])

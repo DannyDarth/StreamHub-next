@@ -303,6 +303,54 @@ fn to_channel(result: FetchResult) -> KickChannel {
     KickChannel { name: result.slug.clone(), slug: result.slug, error: Some(error), ..Default::default() }
 }
 
+/// The signed-in user's session token. kick.com's own pages read it from this cookie and send it
+/// as a Bearer token; StreamHub's hidden kick.com page shares the cookies of the sign-in window.
+const SESSION: &str = r#"
+  const cookie = document.cookie.split("; ").find((c) => c.startsWith("session_token="));
+  const token = cookie ? decodeURIComponent(cookie.slice("session_token=".length)) : "";
+  const authed = (url) => fetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } });
+"#;
+
+/// Who is signed in to kick.com in StreamHub.
+const ACCOUNT: &str = r#"
+  if (!token) return { status: 401 };
+  const res = await authed("/api/v1/user");
+  if (!res.ok) return { status: res.status };
+  const u = await res.json();
+  return { status: 200, items: { username: u.username || u.slug || "", avatar: img(u.profilepic) || img(u.profile_pic) } };
+"#;
+
+/// The channels the signed-in user follows (kick.com's own, unofficial API; paged with a cursor).
+const FOLLOWED: &str = r#"
+  if (!token) return { status: 401 };
+  const items = [];
+  let cursor = 0;
+  for (let page = 0; page < 30; page++) {
+    const res = await authed(`/api/v2/channels/followed?cursor=${encodeURIComponent(cursor)}`);
+    if (!res.ok) return page === 0 ? { status: res.status } : { status: 200, items };
+    const p = await res.json();
+    const rows = Array.isArray(p) ? p : p.channels || p.data || [];
+    for (const r of rows) {
+      const name = r.user_username || r.username || (r.user && r.user.username) || r.channel_slug || r.slug || "";
+      const slug = String(r.channel_slug || r.slug || (r.channel && r.channel.slug) || name).toLowerCase();
+      if (!slug) continue;
+      items.push({
+        slug,
+        name: name || slug,
+        live: Boolean(r.is_live ?? (r.livestream && r.livestream.is_live)),
+        viewers: Number.isFinite(Number(r.viewer_count)) ? Number(r.viewer_count) : null,
+        title: r.session_title || (r.livestream && r.livestream.session_title) || "",
+        category: r.category_name || (r.livestream && r.livestream.categories && r.livestream.categories[0] && r.livestream.categories[0].name) || "",
+        avatar: img(r.profile_picture) || img(r.profile_pic) || (r.user && img(r.user.profile_pic)) || null,
+      });
+    }
+    const next = Array.isArray(p) ? null : (p.nextCursor ?? p.next_cursor ?? null);
+    if (next === null || next === undefined || next === cursor || rows.length === 0) break;
+    cursor = next;
+  }
+  return { status: 200, items };
+"#;
+
 /// Run a script body in the hidden kick.com page and return the JSON it hands back.
 async fn run_in_kick(app: &AppHandle, body: &str) -> Result<String, String> {
     let window = ensure_window(app)?;
@@ -339,6 +387,82 @@ async fn run_in_kick(app: &AppHandle, body: &str) -> Result<String, String> {
     Ok(data)
 }
 
+fn items(data: &str) -> Result<Value, String> {
+    let value: Value = serde_json::from_str(data).map_err(|e| e.to_string())?;
+    match value["status"].as_u64() {
+        Some(200) => Ok(value["items"].clone()),
+        Some(401) | Some(403) => Err("not-signed-in".into()),
+        Some(0) => Err(format!("Couldn't reach Kick: {}", value["error"].as_str().unwrap_or_default())),
+        Some(code) => Err(format!("Kick returned {code}")),
+        None => Err("Unexpected answer from Kick".into()),
+    }
+}
+
+/// The Kick account signed in to StreamHub (Err("not-signed-in") when there is none).
+#[tauri::command]
+pub async fn kick_account(app: AppHandle) -> Result<Value, String> {
+    items(&run_in_kick(&app, &format!("{SESSION}{ACCOUNT}")).await?)
+}
+
+/// The channels the signed-in Kick account follows.
+#[tauri::command]
+pub async fn kick_followed(app: AppHandle) -> Result<Value, String> {
+    items(&run_in_kick(&app, &format!("{SESSION}{FOLLOWED}")).await?)
+}
+
+/// Open kick.com in a StreamHub window to sign in (or out). Kick's sign-in is kick.com's own page:
+/// StreamHub never sees the password. Emits "kick-login-closed" when the window closes.
+#[tauri::command]
+pub async fn kick_login(app: AppHandle) -> Result<(), String> {
+    const LABEL: &str = "kick-login";
+    if let Some(window) = app.get_webview_window(LABEL) {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+    let browser = app.clone();
+    let window = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::External("https://kick.com/".parse().unwrap()))
+        .title("Sign in to Kick - StreamHub")
+        .inner_size(1100.0, 800.0)
+        .center()
+        .on_navigation(move |url| {
+            let host = url.host_str().unwrap_or_default();
+            let allowed = url.scheme() == "https"
+                && (host == "kick.com"
+                    || host.ends_with(".kick.com")
+                    || host == "accounts.google.com"
+                    || host == "appleid.apple.com"
+                    || host == "challenges.cloudflare.com");
+            if !allowed && (url.scheme() == "https" || url.scheme() == "http") {
+                use tauri_plugin_opener::OpenerExt;
+                let _ = browser.opener().open_url(url.as_str(), None::<&str>);
+            }
+            allowed || url.scheme() == "about"
+        })
+        .build()
+        .map_err(|e| e.to_string())?;
+    let closed = app.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::Destroyed = event {
+            let _ = tauri::Emitter::emit(&closed, "kick-login-closed", ());
+        }
+    });
+    Ok(())
+}
+
+/// Sign out of Kick in StreamHub: forget kick.com's session cookie.
+#[tauri::command]
+pub async fn kick_logout(app: AppHandle) -> Result<(), String> {
+    let body = r#"
+  for (const name of ["session_token", "kick_session", "XSRF-TOKEN"]) {
+    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; domain=.kick.com`;
+  }
+  return { status: 200, items: null };
+"#;
+    items(&run_in_kick(&app, body).await?).map(|_| ())
+}
+
 /// Browse Kick: "categories", or "streams" (live streams, of one category when `slug` is given).
 #[tauri::command]
 pub async fn kick_browse(
@@ -361,14 +485,7 @@ pub async fn kick_browse(
             .replace("__LANG__", &serde_json::to_string(&language).unwrap()),
         _ => return Err("Unknown Kick page".into()),
     };
-    let data = run_in_kick(&app, &body).await?;
-    let value: Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
-    match value["status"].as_u64() {
-        Some(200) => Ok(value["items"].clone()),
-        Some(0) => Err(format!("Couldn't reach Kick: {}", value["error"].as_str().unwrap_or_default())),
-        Some(code) => Err(format!("Kick returned {code}")),
-        None => Err("Unexpected answer from Kick".into()),
-    }
+    items(&run_in_kick(&app, &body).await?)
 }
 
 /// Check which of these Kick channels are live.

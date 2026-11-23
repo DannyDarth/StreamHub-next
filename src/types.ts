@@ -133,3 +133,19 @@ export interface KickStream {
   category: string;
   avatar?: string | null;
 }
+
+/** A channel the signed-in Kick account follows (kick::FOLLOWED). */
+export interface KickFollowed {
+  slug: string;
+  name: string;
+  live: boolean;
+  viewers: number | null;
+  title: string;
+  category: string;
+  avatar: string | null;
+}
+
+export interface KickAccount {
+  username: string;
+  avatar: string | null;
+}

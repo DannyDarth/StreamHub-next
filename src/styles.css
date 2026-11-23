@@ -357,3 +357,14 @@ body.with-chat .banner, body.with-chat .playing { margin-right: calc(340px + 20p
 .tab-twitch.active, .tab-kick.active { font-weight: 600; }
 :root[data-theme="light"] .tab-twitch:not(.active) { color: #772ce8; }
 :root[data-theme="light"] .tab-kick:not(.active) { color: #248a07; }
+.kick-account { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.kick-account .link { margin-left: 8px; }
+.kick-signin {
+  padding: 7px 16px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--kick);
+  color: #0b0e0f;
+  font-weight: 700;
+}
+.kick-signin:hover { filter: brightness(1.1); }

@@ -21,7 +21,9 @@ import * as browse from "./browse";
 import type {
   AdblockStatus,
   EndedEvent,
+  KickAccount,
   KickChannel,
+  KickFollowed,
   LiveStream,
   Platform,
   Settings,
@@ -62,6 +64,8 @@ const state = {
   kickError: "",
   kickKnown: null as Set<string> | null,
   search: "",
+  kickAccount: null as KickAccount | null,
+  kickFollowed: [] as KickFollowed[],
   /** The channel shown in the chat panel. */
   chat: null as { platform: Platform; channel: string } | null,
 };
@@ -164,20 +168,45 @@ async function start() {
   await refresh();
 }
 
-async function refreshKick() {
-  if (state.kickSlugs.length === 0) {
-    state.kickChannels = [];
-    render();
-    return;
+/** Every Kick channel shown under "My channels": the ones the user added and the ones they follow. */
+function allKickSlugs(): string[] {
+  return [...new Set([...state.kickSlugs, ...state.kickFollowed.map((f) => f.slug)])];
+}
+
+async function checkKickAccount() {
+  try {
+    state.kickAccount = await invoke<KickAccount>("kick_account");
+  } catch (e) {
+    state.kickAccount = null;
+    state.kickFollowed = [];
+    if (String(e) !== "not-signed-in") state.kickError = `Couldn't check your Kick sign-in: ${String(e)}`;
   }
+}
+
+async function refreshKick() {
   state.kickLoading = true;
   render();
   try {
-    const channels = await invoke<KickChannel[]>("kick_channels", { slugs: state.kickSlugs });
+    if (state.kickAccount) {
+      try {
+        state.kickFollowed = await invoke<KickFollowed[]>("kick_followed");
+      } catch (e) {
+        if (String(e) === "not-signed-in") {
+          state.kickAccount = null;
+          state.kickFollowed = [];
+        } else {
+          state.kickError = `Couldn't load the Kick channels you follow: ${String(e)}`;
+        }
+      }
+    }
+    // check the channels the user added, and the followed ones that are live (for their pictures)
+    const toCheck = [...new Set([...state.kickSlugs, ...state.kickFollowed.filter((f) => f.live).map((f) => f.slug)])];
+    const channels = toCheck.length ? await invoke<KickChannel[]>("kick_channels", { slugs: toCheck }) : [];
     state.kickChannels = channels;
-    state.kickError = "";
+    if (!state.kickError.startsWith("Couldn't load")) state.kickError = "";
+    const live = kickLive();
     state.kickKnown = await notifyNew(
-      channels.filter((c) => c.live).map((c) => ({ key: c.slug, name: c.name, detail: c.title || c.category })),
+      live.map((c) => ({ key: c.slug, name: c.name, detail: c.title || c.category })),
       state.kickKnown,
       "Kick",
     );
@@ -187,6 +216,61 @@ async function refreshKick() {
     state.kickLoading = false;
     render();
   }
+}
+
+/** Live Kick channels: from the channel checks, or the followed list when a check failed. */
+function kickLive(): KickChannel[] {
+  const bySlug = new Map(state.kickChannels.map((c) => [c.slug, c]));
+  const followed = new Map(state.kickFollowed.map((f) => [f.slug, f]));
+  const live: KickChannel[] = [];
+  for (const slug of allKickSlugs()) {
+    const checked = bySlug.get(slug);
+    if (checked && !checked.error) {
+      if (checked.live) live.push(checked);
+      continue;
+    }
+    const f = followed.get(slug);
+    if (f?.live) {
+      live.push({
+        slug,
+        name: f.name,
+        live: true,
+        title: f.title,
+        category: f.category,
+        viewers: f.viewers,
+        thumbnail: null,
+        avatar: f.avatar,
+        startedAt: null,
+        bio: null,
+        followers: null,
+        error: null,
+      });
+    }
+  }
+  return live.sort((a, b) => (b.viewers ?? 0) - (a.viewers ?? 0));
+}
+
+async function kickSignIn() {
+  state.kickError = "";
+  try {
+    await invoke("kick_login");
+    state.message = "Sign in on kick.com in the window that opened, then close it.";
+  } catch (e) {
+    state.kickError = String(e);
+  }
+  render();
+}
+
+async function kickSignOut() {
+  try {
+    await invoke("kick_logout");
+  } catch (e) {
+    state.kickError = String(e);
+  }
+  state.kickAccount = null;
+  state.kickFollowed = [];
+  render();
+  void refreshKick();
 }
 
 function addKick(input: string): boolean {
@@ -506,11 +590,19 @@ function kickCard(channel: KickChannel): HTMLElement {
       h("div", { class: "card-title" }, channel.title || "Untitled stream"),
       h("div", { class: "card-meta" }, h("strong", {}, channel.name), channel.category ? ` · ${channel.category}` : ""),
     ),
-    h("button", { class: "remove", title: `Remove ${channel.name}`, onclick: () => removeKick(channel.slug) }, "×"),
+    state.kickSlugs.includes(channel.slug)
+      ? h("button", { class: "remove", title: `Remove ${channel.name}`, onclick: () => removeKick(channel.slug) }, "×")
+      : null,
   );
 }
 
-function kickRow(slug: string, channel: KickChannel | undefined): HTMLElement {
+function kickRow(slug: string, checked: KickChannel | undefined): HTMLElement {
+  const f = state.kickFollowed.find((x) => x.slug === slug);
+  const channel: KickChannel | undefined =
+    checked ??
+    (f
+      ? { slug, name: f.name, live: false, title: "", category: "", viewers: null, thumbnail: null, avatar: f.avatar, startedAt: null, bio: null, followers: null, error: null }
+      : undefined);
   const status = !channel
     ? state.kickLoading
       ? "Checking…"
@@ -526,17 +618,37 @@ function kickRow(slug: string, channel: KickChannel | undefined): HTMLElement {
       : h("span", { class: "avatar" }),
     h("strong", {}, channel?.name ?? slug),
     h("span", { class: channel?.error ? "row-error" : "muted" }, status),
-    h("button", { class: "link", onclick: () => removeKick(slug) }, "Remove"),
+    state.kickSlugs.includes(slug)
+      ? h("button", { class: "link", onclick: () => removeKick(slug) }, "Remove")
+      : h("span", { class: "muted push", title: "Unfollow on kick.com to remove it" }, "Following"),
   );
 }
 
 function kickView(): HTMLElement {
   const bySlug = new Map(state.kickChannels.map((c) => [c.slug, c]));
-  const live = state.kickSlugs
-    .map((slug) => bySlug.get(slug))
-    .filter((c): c is KickChannel => Boolean(c?.live))
-    .sort((a, b) => (b.viewers ?? 0) - (a.viewers ?? 0));
-  const others = state.kickSlugs.filter((slug) => !bySlug.get(slug)?.live);
+  const live = kickLive();
+  const liveSlugs = new Set(live.map((c) => c.slug));
+  const all = allKickSlugs();
+  const others = all.filter((slug) => !liveSlugs.has(slug));
+
+  const account = state.kickAccount
+    ? h(
+        "div",
+        { class: "kick-account" },
+        state.kickAccount.avatar
+          ? h("img", { class: "avatar", src: state.kickAccount.avatar, alt: "", referrerpolicy: "no-referrer" })
+          : null,
+        h("span", { class: "muted" }, "Signed in to Kick as "),
+        h("strong", {}, state.kickAccount.username),
+        h("span", { class: "muted" }, ` · ${state.kickFollowed.length} followed`),
+        h("button", { class: "link", onclick: () => void kickSignOut() }, "Sign out"),
+      )
+    : h(
+        "div",
+        { class: "kick-account" },
+        h("button", { class: "kick-signin", onclick: () => void kickSignIn() }, "Sign in to Kick"),
+        h("span", { class: "muted" }, "to show every channel you follow, without adding them one by one"),
+      );
 
   const input = h("input", {
     type: "text",
@@ -569,13 +681,14 @@ function kickView(): HTMLElement {
         state.kickLoading ? "Refreshing…" : "Refresh",
       ),
     ),
+    account,
     form,
     state.kickError ? h("p", { class: "row-error" }, state.kickError) : null,
-    state.kickSlugs.length === 0
-      ? h("p", { class: "empty" }, "Add the Kick channels you watch. StreamHub checks them every minute and tells you when they go live.")
+    all.length === 0
+      ? h("p", { class: "empty" }, "Sign in to Kick, or add the Kick channels you watch. StreamHub checks them every minute and tells you when they go live.")
       : null,
     live.length > 0 ? h("div", { class: "grid" }, ...live.map(kickCard)) : null,
-    live.length === 0 && state.kickSlugs.length > 0 && !state.kickLoading
+    live.length === 0 && all.length > 0 && !state.kickLoading
       ? h("p", { class: "empty" }, "None of your Kick channels are live right now.")
       : null,
     others.length > 0 ? h("h2", {}, "Offline") : null,
@@ -839,7 +952,14 @@ window.setInterval(() => {
   void refresh();
   void refreshKick();
 }, REFRESH_MS);
+void listen("kick-login-closed", async () => {
+  state.message = "";
+  await checkKickAccount();
+  if (!state.kickAccount) state.kickError = "Not signed in to Kick. Sign in on kick.com, then close the window.";
+  await refreshKick();
+});
+
 applyTheme(state.settings.theme);
 followSystemTheme(() => state.settings.theme);
 void start();
-void refreshKick();
+void checkKickAccount().then(() => refreshKick());
