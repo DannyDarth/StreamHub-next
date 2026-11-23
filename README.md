@@ -16,7 +16,7 @@ The StreamHub desktop app rebuilt with [Tauri 2](https://tauri.app): a Rust core
 
 - Twitch sign-in (same Twitch app and redirect as StreamHub 1.x)
 - Followed channels that are live, with live notifications
-- Kick: sign in on kick.com (in a StreamHub window; StreamHub never sees your password) to show every channel you follow, plus any channels you add yourself; checked every minute, with live notifications; watch through Streamlink
+- Kick: sign in on kick.com from Settings → Kick (in a StreamHub window; StreamHub never sees your password) to show every channel you follow, plus any channels you add yourself; checked every minute, with live notifications; watch through Streamlink
 - Watching through Streamlink, with the ad blocking above and a status bar per stream
 - Chat (optional, off by default: Settings → Chat) for Twitch and Kick: in a panel on the right of StreamHub (the sites' own popout chat; sign in there to send messages), your default browser, or Chatterino; optionally opened with the stream
 - Browse and search: top categories and live streams, category pages and channel pages for Twitch and Kick (Kick has no channel search: StreamHub looks up the exact name)

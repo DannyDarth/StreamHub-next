@@ -590,9 +590,7 @@ function kickCard(channel: KickChannel): HTMLElement {
       h("div", { class: "card-title" }, channel.title || "Untitled stream"),
       h("div", { class: "card-meta" }, h("strong", {}, channel.name), channel.category ? ` · ${channel.category}` : ""),
     ),
-    state.kickSlugs.includes(channel.slug)
-      ? h("button", { class: "remove", title: `Remove ${channel.name}`, onclick: () => removeKick(channel.slug) }, "×")
-      : null,
+
   );
 }
 
@@ -618,9 +616,11 @@ function kickRow(slug: string, checked: KickChannel | undefined): HTMLElement {
       : h("span", { class: "avatar" }),
     h("strong", {}, channel?.name ?? slug),
     h("span", { class: channel?.error ? "row-error" : "muted" }, status),
-    state.kickSlugs.includes(slug)
-      ? h("button", { class: "link", onclick: () => removeKick(slug) }, "Remove")
-      : h("span", { class: "muted push", title: "Unfollow on kick.com to remove it" }, "Following"),
+    h(
+      "span",
+      { class: "muted push" },
+      state.kickFollowed.some((f) => f.slug === slug) ? "Following" : "Added",
+    ),
   );
 }
 
@@ -631,6 +631,38 @@ function kickView(): HTMLElement {
   const all = allKickSlugs();
   const others = all.filter((slug) => !liveSlugs.has(slug));
 
+  return h(
+    "main",
+    {},
+    h(
+      "div",
+      { class: "toolbar" },
+      h("h1", {}, "My Kick channels"),
+      h(
+        "button",
+        { class: "small", onclick: () => void refreshKick(), disabled: state.kickLoading },
+        state.kickLoading ? "Refreshing…" : "Refresh",
+      ),
+    ),
+    state.kickError ? h("p", { class: "row-error" }, state.kickError) : null,
+    all.length === 0
+      ? h(
+          "p",
+          { class: "empty" },
+          "No Kick channels yet. In Settings → Kick, sign in to Kick to see every channel you follow, or add channels yourself.",
+        )
+      : null,
+    live.length > 0 ? h("div", { class: "grid" }, ...live.map(kickCard)) : null,
+    live.length === 0 && all.length > 0 && !state.kickLoading
+      ? h("p", { class: "empty" }, "None of your Kick channels are live right now.")
+      : null,
+    others.length > 0 ? h("h2", {}, "Offline") : null,
+    others.length > 0 ? h("div", { class: "rows" }, ...others.map((slug) => kickRow(slug, bySlug.get(slug)))) : null,
+  );
+}
+
+/** Settings → Kick: sign-in and the channels added by hand. */
+function kickSettings(): HTMLElement[] {
   const account = state.kickAccount
     ? h(
         "div",
@@ -668,32 +700,35 @@ function kickView(): HTMLElement {
     h("button", { class: "small", type: "submit" }, "Add"),
   );
 
-  return h(
-    "main",
-    {},
-    h(
-      "div",
-      { class: "toolbar" },
-      h("h1", {}, "My Kick channels"),
-      h(
-        "button",
-        { class: "small", onclick: () => void refreshKick(), disabled: state.kickLoading },
-        state.kickLoading ? "Refreshing…" : "Refresh",
-      ),
-    ),
+
+  const added = state.kickSlugs.length
+    ? h(
+        "div",
+        { class: "rows" },
+        ...state.kickSlugs.map((slug) => {
+          const c = state.kickChannels.find((x) => x.slug === slug);
+          return h(
+            "div",
+            { class: "row" },
+            c?.avatar
+              ? h("img", { class: "avatar", src: c.avatar, alt: "", referrerpolicy: "no-referrer" })
+              : h("span", { class: "avatar" }),
+            h("strong", {}, c?.name ?? slug),
+            h("button", { class: "link push", onclick: () => removeKick(slug) }, "Remove"),
+          );
+        }),
+      )
+    : h("p", { class: "muted" }, "None yet.");
+
+  return [
+    h("h2", {}, "Kick"),
     account,
+    state.kickError ? h("p", { class: "row-error" }, state.kickError) : h("span", {}),
+    h("h3", {}, "Channels you added"),
+    h("p", { class: "muted" }, "Kick channels to show under My channels even if you don't follow them (or aren't signed in)."),
     form,
-    state.kickError ? h("p", { class: "row-error" }, state.kickError) : null,
-    all.length === 0
-      ? h("p", { class: "empty" }, "Sign in to Kick, or add the Kick channels you watch. StreamHub checks them every minute and tells you when they go live.")
-      : null,
-    live.length > 0 ? h("div", { class: "grid" }, ...live.map(kickCard)) : null,
-    live.length === 0 && all.length > 0 && !state.kickLoading
-      ? h("p", { class: "empty" }, "None of your Kick channels are live right now.")
-      : null,
-    others.length > 0 ? h("h2", {}, "Offline") : null,
-    others.length > 0 ? h("div", { class: "rows" }, ...others.map((slug) => kickRow(slug, bySlug.get(slug)))) : null,
-  );
+    added,
+  ];
 }
 
 function checkbox(label: string, help: string, key: keyof Settings): HTMLElement {
@@ -827,6 +862,8 @@ function settingsView(): HTMLElement {
     s.chatEnabled
       ? checkbox("Open chat with the stream", "Open the channel's chat when a stream starts.", "chatAutoOpen")
       : null,
+
+    ...kickSettings(),
 
     h("h2", {}, "Browse"),
     select("Stream language", "streamLanguage", LANGUAGES, "Top live streams and categories only show streams in this language."),
