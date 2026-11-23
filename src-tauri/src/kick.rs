@@ -178,7 +178,8 @@ const CATEGORIES: &str = r#"
 const STREAMS: &str = r#"
   const sub = __SLUG__;
   const pages = await Promise.all([1, 2].map(async (n) => {
-    const q = new URLSearchParams({ page: String(n) });
+    // sort=desc: most viewers first (without it Kick lists streams in no useful order)
+    const q = new URLSearchParams({ page: String(n), limit: "24", sort: "desc" });
     if (sub) q.set("subcategory", sub);
     const r = await fetch(`/stream/livestreams/en?${q}`, { headers: { Accept: "application/json" } });
     if (!r.ok) return { status: r.status, rows: [] };
