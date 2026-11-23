@@ -42,6 +42,7 @@ export interface Settings {
   backupStream: boolean;
   badge: boolean;
   notifications: boolean;
+  chatEnabled: boolean;
   chatProvider: ChatProvider;
   chatAutoOpen: boolean;
 }

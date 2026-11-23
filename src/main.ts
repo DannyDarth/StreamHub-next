@@ -225,7 +225,7 @@ async function watch(platform: Platform, channel: string) {
   try {
     const id = await invoke<number>("watch", { platform, channel, settings: state.settings });
     state.playing.set(id, { platform, channel, status: null });
-    if (state.settings.chatAutoOpen) void openChat(platform, channel);
+    if (state.settings.chatEnabled && state.settings.chatAutoOpen) void openChat(platform, channel);
   } catch (e) {
     state.error = String(e);
   }
@@ -326,8 +326,10 @@ function playingBar(): HTMLElement | null {
               `${p.status.adsCovered} ads blocked · ${p.status.adsGotThrough} filtered`,
             )
           : null,
-        h("button", { class: "small push", onclick: () => void openChat(p.platform, p.channel) }, "Chat"),
-        h("button", { class: "small", onclick: () => void stop(id) }, "Stop"),
+        state.settings.chatEnabled
+          ? h("button", { class: "small push", onclick: () => void openChat(p.platform, p.channel) }, "Chat")
+          : null,
+        h("button", { class: `small${state.settings.chatEnabled ? "" : " push"}`, onclick: () => void stop(id) }, "Stop"),
       ),
     ),
   );
@@ -575,7 +577,10 @@ function settingsView(): HTMLElement {
     checkbox("Ad blocking badge", "Show the status in the corner of the player.", "badge"),
 
     h("h2", {}, "Chat"),
-    h(
+    checkbox("Chat", "Add a Chat button to playing streams.", "chatEnabled"),
+    !s.chatEnabled
+      ? null
+      : h(
       "label",
       { class: "field" },
       h("span", {}, "Open chat in"),
@@ -594,7 +599,9 @@ function settingsView(): HTMLElement {
         ).map(([value, label]) => h("option", { value, selected: s.chatProvider === value }, label)),
       ),
     ),
-    checkbox("Open chat with the stream", "Open the channel's chat when a stream starts.", "chatAutoOpen"),
+    s.chatEnabled
+      ? checkbox("Open chat with the stream", "Open the channel's chat when a stream starts.", "chatAutoOpen")
+      : null,
 
     h("h2", {}, "Notifications"),
     checkbox("Live notifications", "Notify me when a Twitch channel I follow or one of my Kick channels goes live.", "notifications"),

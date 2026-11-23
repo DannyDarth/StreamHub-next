@@ -16,6 +16,8 @@ export const DEFAULTS: Settings = {
   backupStream: false,
   badge: true,
   notifications: true,
+  // chat is optional: off until the user turns it on
+  chatEnabled: false,
   chatProvider: "window",
   chatAutoOpen: false,
 };

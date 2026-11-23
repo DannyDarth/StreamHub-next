@@ -18,7 +18,7 @@ The StreamHub desktop app rebuilt with [Tauri 2](https://tauri.app): a Rust core
 - Followed channels that are live, with live notifications
 - Kick: your own list of Kick channels (Kick has no public "followed" list), checked every minute, with live notifications; watch through Streamlink
 - Watching through Streamlink, with the ad blocking above and a status bar per stream
-- Chat for Twitch and Kick: in a StreamHub window (the sites' own popout chat; sign in there to send messages), your default browser, or Chatterino; optionally opened with the stream
+- Chat (optional, off by default: Settings → Chat) for Twitch and Kick: in a StreamHub window (the sites' own popout chat; sign in there to send messages), your default browser, or Chatterino; optionally opened with the stream
 - Settings: Streamlink path, player, quality, low latency, proxies, VPN mode, backup stream, badge
 - Tray icon (closing the window keeps StreamHub running)
 
