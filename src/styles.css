@@ -233,3 +233,33 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--panel-2); object-fit: cover; flex: none; }
 .row-error { color: var(--error); }
 .thumb img.fallback { object-fit: contain; padding: 18%; background: var(--panel-2); }
+
+/* Chat panel: StreamHub shows the chat page itself on the right (below this bar) */
+body.with-chat #app > :not(header):not(.chat-bar) { margin-right: 340px; }
+body.with-chat .banner, body.with-chat .playing { margin-right: calc(340px + 20px); }
+.chat-bar {
+  position: fixed;
+  top: 52px;
+  right: 0;
+  width: 340px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 12px;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  z-index: 3;
+}
+.chat-bar strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-close {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+}
+.chat-close:hover { background: var(--panel-2); }

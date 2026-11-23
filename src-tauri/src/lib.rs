@@ -31,6 +31,7 @@ pub fn run() {
             badge::badge_hide,
             kick::kick_channels,
             chat::open_chat,
+            chat::close_chat,
         ])
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "Show StreamHub", true, None::<&str>)?;
@@ -70,9 +71,15 @@ pub fn run() {
         .on_window_event(|window, event| {
             // closing the main window keeps StreamHub running in the tray
             if window.label() == "main" {
-                if let WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    let _ = window.hide();
+                match event {
+                    WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                    WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+                        chat::layout_panel(window.app_handle());
+                    }
+                    _ => {}
                 }
             }
         })

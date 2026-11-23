@@ -51,6 +51,8 @@ const state = {
   kickLoading: false,
   kickError: "",
   kickKnown: null as Set<string> | null,
+  /** The channel shown in the chat panel. */
+  chat: null as { platform: Platform; channel: string } | null,
 };
 
 // ---- tiny DOM helper (text is always set with textContent) ----
@@ -233,15 +235,36 @@ async function watch(platform: Platform, channel: string) {
 }
 
 async function openChat(platform: Platform, channel: string) {
+  const provider = state.settings.chatProvider;
   try {
-    await invoke("open_chat", { platform, channel, provider: state.settings.chatProvider });
+    await invoke("open_chat", { platform, channel, provider });
+    const inPanel = provider === "panel" || (provider === "chatterino" && platform === "kick");
+    if (inPanel) state.chat = { platform, channel };
+  } catch (e) {
+    state.error = String(e);
+  }
+  render();
+}
+
+async function closeChat() {
+  state.chat = null;
+  render();
+  try {
+    await invoke("close_chat");
   } catch (e) {
     state.error = String(e);
     render();
   }
 }
 
+/** Close the chat panel when its stream stops. */
+function closeChatOf(platform: Platform, channel: string) {
+  if (state.chat?.platform === platform && state.chat.channel === channel.toLowerCase()) void closeChat();
+}
+
 async function stop(id: number) {
+  const p = state.playing.get(id);
+  if (p) closeChatOf(p.platform, p.channel);
   await invoke("stop", { id });
 }
 
@@ -592,9 +615,9 @@ function settingsView(): HTMLElement {
         },
         ...(
           [
-            ["window", "A StreamHub window"],
+            ["panel", "StreamHub (right side)"],
             ["browser", "My default browser"],
-            ["chatterino", "Chatterino (Twitch; Kick opens in a StreamHub window)"],
+            ["chatterino", "Chatterino (Twitch; Kick chat stays in StreamHub)"],
           ] as const
         ).map(([value, label]) => h("option", { value, selected: s.chatProvider === value }, label)),
       ),
@@ -657,6 +680,16 @@ function render() {
           : state.user
             ? liveView()
             : signInView();
+  document.body.classList.toggle("with-chat", Boolean(state.chat));
+  const chatBar = state.chat
+    ? h(
+        "div",
+        { class: "chat-bar" },
+        h("span", { class: `chip ${state.chat.platform === "kick" ? "kick" : "info"}` }, state.chat.platform === "kick" ? "Kick" : "Twitch"),
+        h("strong", {}, `${state.chat.channel} chat`),
+        h("button", { class: "chat-close", title: "Close chat", onclick: () => void closeChat() }, "×"),
+      )
+    : null;
   currentBody = body;
   currentView = state.view;
   app.replaceChildren(
@@ -665,6 +698,7 @@ function render() {
     state.message ? h("div", { class: "banner" }, state.message) : "",
     playingBar() ?? "",
     body,
+    chatBar ?? "",
   );
 }
 
@@ -679,6 +713,8 @@ void listen<StatusEvent>("adblock-status", ({ payload }) => {
 });
 
 void listen<EndedEvent>("stream-ended", ({ payload }) => {
+  const p = state.playing.get(payload.id);
+  if (p) closeChatOf(p.platform, p.channel);
   state.playing.delete(payload.id);
   if (payload.error) state.error = `${payload.channel}: ${payload.error}`;
   render();

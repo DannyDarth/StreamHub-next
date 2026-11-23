@@ -18,14 +18,17 @@ export const DEFAULTS: Settings = {
   notifications: true,
   // chat is optional: off until the user turns it on
   chatEnabled: false,
-  chatProvider: "window",
+  chatProvider: "panel",
   chatAutoOpen: false,
 };
 
 export function loadSettings(): Settings {
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) ?? "{}") as Partial<Settings>;
-    return { ...DEFAULTS, ...saved };
+    const settings = { ...DEFAULTS, ...saved };
+    // the chat window became the chat panel
+    if ((settings.chatProvider as string) === "window") settings.chatProvider = "panel";
+    return settings;
   } catch {
     return { ...DEFAULTS };
   }

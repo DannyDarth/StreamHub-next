@@ -1,11 +1,12 @@
-//! Chat: Twitch and Kick chat in a StreamHub window (the sites' own popout chat), in the default
-//! browser, or in Chatterino, like StreamHub 1.x's chat options.
+//! Chat: Twitch and Kick chat in a panel on the right of StreamHub's window (the sites' own popout
+//! chat), in the default browser, or in Chatterino.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde::Deserialize;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::webview::WebviewBuilder;
+use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::streamlink::{valid_channel, valid_kick_slug, Platform};
@@ -13,7 +14,9 @@ use crate::streamlink::{valid_channel, valid_kick_slug, Platform};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ChatProvider {
-    Window,
+    /// The chat panel on the right of StreamHub's window.
+    #[serde(alias = "window")]
+    Panel,
     Browser,
     Chatterino,
 }
@@ -54,43 +57,69 @@ fn find_chatterino() -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
-fn open_window(app: &AppHandle, platform: Platform, channel: &str) -> Result<(), String> {
-    let site = match platform {
-        Platform::Twitch => "twitch",
-        Platform::Kick => "kick",
-    };
-    let label = format!("chat-{site}-{channel}");
-    if let Some(window) = app.get_webview_window(&label) {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+pub const PANEL: &str = "chat-panel";
+/// Width of the chat panel on the right of StreamHub's window, in logical pixels.
+pub const PANEL_WIDTH: f64 = 340.0;
+/// The panel starts below StreamHub's header and the panel's own title bar (drawn by the UI).
+pub const PANEL_TOP: f64 = 52.0 + 40.0;
+
+fn panel_bounds(window: &tauri::Window) -> Option<(LogicalPosition<f64>, LogicalSize<f64>)> {
+    let scale = window.scale_factor().ok()?;
+    let size = window.inner_size().ok()?.to_logical::<f64>(scale);
+    let width = PANEL_WIDTH.min(size.width);
+    Some((
+        LogicalPosition::new(size.width - width, PANEL_TOP),
+        LogicalSize::new(width, (size.height - PANEL_TOP).max(0.0)),
+    ))
+}
+
+/// Keep the chat panel on the right edge when StreamHub's window is resized.
+pub fn layout_panel(app: &AppHandle) {
+    let (Some(window), Some(panel)) = (app.get_window("main"), app.get_webview(PANEL)) else { return };
+    if let Some((position, size)) = panel_bounds(&window) {
+        let _ = panel.set_position(position);
+        let _ = panel.set_size(size);
+    }
+}
+
+fn open_panel(app: &AppHandle, platform: Platform, channel: &str) -> Result<(), String> {
+    let url: tauri::Url = chat_url(platform, channel).parse().map_err(|e| format!("{e}"))?;
+    if let Some(panel) = app.get_webview(PANEL) {
+        panel.navigate(url).map_err(|e| e.to_string())?;
+        layout_panel(app);
         return Ok(());
     }
 
-    let url = chat_url(platform, channel).parse().map_err(|e| format!("{e}"))?;
+    let window = app.get_window("main").ok_or("StreamHub's window is missing")?;
+    let (position, size) = panel_bounds(&window).ok_or("Couldn't size the chat panel")?;
     let browser = app.clone();
-    WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
-        .title(format!("{channel} chat - StreamHub"))
-        .inner_size(400.0, 760.0)
-        .min_inner_size(280.0, 320.0)
-        .on_navigation(move |url| {
-            if allowed_in_chat_window(url) {
-                return true;
-            }
-            // links in chat open in the default browser
-            if url.scheme() == "https" || url.scheme() == "http" {
-                let _ = browser.opener().open_url(url.as_str(), None::<&str>);
-            }
-            false
-        })
-        .build()
-        .map_err(|e| e.to_string())?;
+    let builder = WebviewBuilder::new(PANEL, WebviewUrl::External(url)).on_navigation(move |url| {
+        if allowed_in_chat_window(url) {
+            return true;
+        }
+        // links in chat open in the default browser
+        if url.scheme() == "https" || url.scheme() == "http" {
+            let _ = browser.opener().open_url(url.as_str(), None::<&str>);
+        }
+        false
+    });
+    window.add_child(builder, position, size).map_err(|e| e.to_string())?;
     Ok(())
 }
 
-/// Open a channel's chat.
+/// Close the chat panel.
 #[tauri::command]
-pub fn open_chat(app: AppHandle, platform: Platform, channel: String, provider: ChatProvider) -> Result<(), String> {
+pub async fn close_chat(app: AppHandle) -> Result<(), String> {
+    if let Some(panel) = app.get_webview(PANEL) {
+        panel.close().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Open a channel's chat. Async: creating a webview in a synchronous command deadlocks on Windows
+/// (that froze the old chat window and StreamHub's buttons).
+#[tauri::command]
+pub async fn open_chat(app: AppHandle, platform: Platform, channel: String, provider: ChatProvider) -> Result<(), String> {
     let channel = channel.to_ascii_lowercase();
     let valid = match platform {
         Platform::Twitch => valid_channel(&channel),
@@ -105,7 +134,7 @@ pub fn open_chat(app: AppHandle, platform: Platform, channel: String, provider: 
             .opener()
             .open_url(chat_url(platform, &channel), None::<&str>)
             .map_err(|e| format!("Couldn't open the browser: {e}")),
-        // Chatterino is Twitch only: Kick chat opens in a StreamHub window
+        // Chatterino is Twitch only: Kick chat opens in the chat panel
         (ChatProvider::Chatterino, Platform::Twitch) => {
             let exe = find_chatterino()
                 .ok_or("Chatterino wasn't found. Install it or pick another chat option in Settings.")?;
@@ -117,7 +146,7 @@ pub fn open_chat(app: AppHandle, platform: Platform, channel: String, provider: 
                 .stderr(Stdio::null());
             command.spawn().map(|_| ()).map_err(|e| format!("Couldn't start Chatterino: {e}"))
         }
-        _ => open_window(&app, platform, &channel),
+        _ => open_panel(&app, platform, &channel),
     }
 }
 

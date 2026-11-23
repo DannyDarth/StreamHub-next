@@ -47,7 +47,7 @@ export interface Settings {
   chatAutoOpen: boolean;
 }
 
-export type ChatProvider = "window" | "browser" | "chatterino";
+export type ChatProvider = "panel" | "browser" | "chatterino";
 
 export interface TwitchUser {
   id: string;
