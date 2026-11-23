@@ -16,6 +16,8 @@ export const DEFAULTS: Settings = {
   backupStream: false,
   badge: true,
   notifications: true,
+  chatProvider: "window",
+  chatAutoOpen: false,
 };
 
 export function loadSettings(): Settings {

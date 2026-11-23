@@ -1,6 +1,7 @@
 mod adblock;
 mod auth;
 mod badge;
+mod chat;
 mod kick;
 mod streamlink;
 
@@ -29,6 +30,7 @@ pub fn run() {
             streamlink::streamlink_info,
             badge::badge_hide,
             kick::kick_channels,
+            chat::open_chat,
         ])
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "Show StreamHub", true, None::<&str>)?;

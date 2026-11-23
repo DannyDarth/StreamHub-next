@@ -42,7 +42,11 @@ export interface Settings {
   backupStream: boolean;
   badge: boolean;
   notifications: boolean;
+  chatProvider: ChatProvider;
+  chatAutoOpen: boolean;
 }
+
+export type ChatProvider = "window" | "browser" | "chatterino";
 
 export interface TwitchUser {
   id: string;

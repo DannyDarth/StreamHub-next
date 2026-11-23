@@ -107,7 +107,7 @@ h2 { font-size: 15px; margin: 28px 0 8px; }
   background: var(--panel);
   border: 1px solid var(--line);
 }
-.playing-item .small { margin-left: auto; }
+.playing-item .push { margin-left: auto; }
 
 .chip {
   padding: 2px 10px;
