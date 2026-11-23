@@ -320,3 +320,9 @@ body.with-chat .banner, body.with-chat .playing { margin-right: calc(340px + 20p
 .bio { color: var(--muted); max-width: 720px; white-space: pre-line; }
 .actions { display: flex; gap: 8px; margin-top: 12px; }
 .offline-banner { width: 100%; max-width: 900px; border-radius: 8px; }
+
+/* grid items must not grow past their column (long titles don't wrap) */
+.grid > *, .categories > * { min-width: 0; }
+.card { width: 100%; }
+.card-wrap { min-width: 0; }
+.card-wrap .card-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

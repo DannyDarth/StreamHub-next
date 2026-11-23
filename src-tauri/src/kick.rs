@@ -198,7 +198,10 @@ const STREAMS: &str = r#"
       slug,
       name: user.username || ch.username || slug,
       title: row.session_title || row.title || "",
-      viewers: row.viewer_count ?? row.viewers ?? null,
+      // Kick's directory has several viewer fields and not all are filled: take the first count above 0
+      viewers: [row.viewer_count, row.viewers, row.concurrent_viewers, row.current_viewers, row.viewcount,
+        row.livestream && row.livestream.viewer_count, ch.livestream && ch.livestream.viewer_count]
+        .map(Number).find((n) => Number.isFinite(n) && n > 0) ?? null,
       thumbnail: img(row.thumbnail) || img(row.thumbnail_url),
       category: (row.categories && row.categories[0] && row.categories[0].name) || (row.category && row.category.name) || "",
     });
