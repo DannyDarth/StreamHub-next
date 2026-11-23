@@ -1,5 +1,7 @@
 # StreamHub (next)
 
+> **Moved.** This app was released as StreamHub 2.0.0 and now lives in [DannyDarth/StreamHub](https://github.com/DannyDarth/StreamHub). Development continues there; this repo is kept for its history.
+
 The StreamHub desktop app rebuilt with [Tauri 2](https://tauri.app): a Rust core with a light web UI, replacing the NW.js + Ember app in [DannyDarth/StreamHub](https://github.com/DannyDarth/StreamHub). Windows only.
 
 > **Preview.** There are no releases yet. Test builds come from GitHub Actions (see below). StreamHub 1.x stays the app to use until this one catches up.
