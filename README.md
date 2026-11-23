@@ -19,10 +19,11 @@ The StreamHub desktop app rebuilt with [Tauri 2](https://tauri.app): a Rust core
 - Kick: your own list of Kick channels (Kick has no public "followed" list), checked every minute, with live notifications; watch through Streamlink
 - Watching through Streamlink, with the ad blocking above and a status bar per stream
 - Chat (optional, off by default: Settings → Chat) for Twitch and Kick: in a panel on the right of StreamHub (the sites' own popout chat; sign in there to send messages), your default browser, or Chatterino; optionally opened with the stream
+- Browse and search: top categories and live streams, category pages and channel pages for Twitch and Kick (Kick has no channel search: StreamHub looks up the exact name)
 - Settings: Streamlink path, player, quality, low latency, proxies, VPN mode, backup stream, badge
 - Tray icon (closing the window keeps StreamHub running)
 
-Next: search, channel and game pages and the rest of StreamHub 1.x.
+Next: the rest of StreamHub 1.x (videos, clips, more settings).
 
 Kick doesn't put ads into the streams Streamlink plays, so Kick streams don't need the proxy plugin. If Kick starts doing that, StreamHub will need its own Kick ad blocking.
 
@@ -48,7 +49,7 @@ Tests: `cargo test` in `src-tauri/`, and `pytest plugin/tests` with `STREAMHUB_T
 
 | Path | What |
 | --- | --- |
-| `src/` | UI (TypeScript, no framework): `main.ts`, the badge window `badge.ts` |
+| `src/` | UI (TypeScript, no framework): `main.ts`, browse/search/channel pages `browse.ts`, the badge window `badge.ts` |
 | `src-tauri/src/adblock.rs` | Streamlink log parsing, proxy rotation, badge status |
 | `src-tauri/src/streamlink.rs` | Finding Streamlink and the plugin, launching, auto-switching proxies |
 | `src-tauri/src/kick.rs` | Live status of your Kick channels |

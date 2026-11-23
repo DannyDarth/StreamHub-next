@@ -1,4 +1,4 @@
-import type { LiveStream, TwitchUser } from "./types";
+import type { LiveStream, TwitchChannelResult, TwitchGame, TwitchProfile, TwitchUser } from "./types";
 
 export const CLIENT_ID = "phiay4sq36lfv9zu7cbqwz2ndnesfd8";
 
@@ -48,4 +48,48 @@ export async function followedLive(token: string, user: TwitchUser): Promise<Liv
 
 export function thumbnail(stream: LiveStream, width = 440, height = 248): string {
   return stream.thumbnail_url.replace("{width}", String(width)).replace("{height}", String(height));
+}
+
+export function boxArt(game: TwitchGame, width = 188, height = 250): string {
+  return game.box_art_url.replace("{width}", String(width)).replace("{height}", String(height));
+}
+
+export async function topGames(token: string): Promise<TwitchGame[]> {
+  return (await helix<{ data: TwitchGame[] }>(token, "games/top", { first: "60" })).data;
+}
+
+/** Live streams in a category, most viewers first. */
+export async function gameStreams(token: string, gameId: string): Promise<LiveStream[]> {
+  return (await helix<{ data: LiveStream[] }>(token, "streams", { game_id: gameId, first: "60" })).data;
+}
+
+export async function topStreams(token: string): Promise<LiveStream[]> {
+  return (await helix<{ data: LiveStream[] }>(token, "streams", { first: "60" })).data;
+}
+
+export async function searchChannels(token: string, query: string): Promise<TwitchChannelResult[]> {
+  const data = await helix<{ data: TwitchChannelResult[] }>(token, "search/channels", { query, first: "30" });
+  // live channels first
+  return data.data.sort((a, b) => Number(b.is_live) - Number(a.is_live));
+}
+
+export async function searchCategories(token: string, query: string): Promise<TwitchGame[]> {
+  return (await helix<{ data: TwitchGame[] }>(token, "search/categories", { query, first: "20" })).data;
+}
+
+export interface ChannelPage {
+  profile: TwitchProfile;
+  stream: LiveStream | null;
+  followers: number | null;
+}
+
+export async function channelPage(token: string, login: string): Promise<ChannelPage | null> {
+  const users = await helix<{ data: TwitchProfile[] }>(token, "users", { login });
+  const profile = users.data[0];
+  if (!profile) return null;
+  const [streams, followers] = await Promise.all([
+    helix<{ data: LiveStream[] }>(token, "streams", { user_id: profile.id }),
+    helix<{ total: number }>(token, "channels/followers", { broadcaster_id: profile.id, first: "1" }).catch(() => null),
+  ]);
+  return { profile, stream: streams.data[0] ?? null, followers: followers?.total ?? null };
 }

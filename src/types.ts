@@ -79,5 +79,51 @@ export interface KickChannel {
   thumbnail: string | null;
   avatar: string | null;
   startedAt: string | null;
+  bio: string | null;
+  followers: number | null;
   error: string | null;
+}
+
+/** Helix /search/channels */
+export interface TwitchChannelResult {
+  id: string;
+  broadcaster_login: string;
+  display_name: string;
+  is_live: boolean;
+  game_name: string;
+  title: string;
+  thumbnail_url: string;
+}
+
+/** Helix /games and /search/categories */
+export interface TwitchGame {
+  id: string;
+  name: string;
+  box_art_url: string;
+}
+
+/** Helix /users */
+export interface TwitchProfile {
+  id: string;
+  login: string;
+  display_name: string;
+  description: string;
+  profile_image_url: string;
+  offline_image_url: string;
+}
+
+export interface KickCategory {
+  slug: string;
+  name: string;
+  image: string | null;
+  viewers: number | null;
+}
+
+export interface KickStream {
+  slug: string;
+  name: string;
+  title: string;
+  viewers: number | null;
+  thumbnail: string | null;
+  category: string;
 }

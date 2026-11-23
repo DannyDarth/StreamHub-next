@@ -28,6 +28,8 @@ pub struct KickChannel {
     pub thumbnail: Option<String>,
     pub avatar: Option<String>,
     pub started_at: Option<String>,
+    pub bio: Option<String>,
+    pub followers: Option<u64>,
     pub error: Option<String>,
 }
 
@@ -70,6 +72,8 @@ pub fn parse_channel(slug: &str, data: &Value) -> KickChannel {
         thumbnail: if is_live { image_url(&live["thumbnail"]) } else { None },
         avatar: text(&user["profile_pic"]).filter(|u| u.starts_with("https://")),
         started_at: if is_live { text(&live["created_at"]).or_else(|| text(&live["start_time"])) } else { None },
+        bio: text(&user["bio"]),
+        followers: data["followers_count"].as_u64(),
         error: None,
     }
 }
@@ -99,13 +103,36 @@ const PAGE: &str = "https://kick.com/robots.txt";
 const RESULT_HOST: &str = "streamhub.invalid";
 
 /// Fetches the channels in the page and keeps only the fields StreamHub uses.
-const SCRIPT: &str = r#"
+/// Runs a script body in the kick.com page and hands its result back (see `run_in_kick`).
+const WRAPPER: &str = r#"
 (async () => {
+  const img = (b) => {
+    if (!b) return null;
+    const raw = typeof b === "string" ? b : (b.src || b.url || b.responsive || "");
+    if (typeof raw !== "string") return null;
+    const first = raw.split(",")[0].trim().split(/\s+/)[0];
+    return /^https:\/\//.test(first) ? first : null;
+  };
+  let result;
+  try {
+    result = await (async () => {
+__BODY__
+    })();
+  } catch (e) {
+    result = { status: 0, error: String(e) };
+  }
+  location.href = "https://__HOST__/kick?id=__ID__&data=" + encodeURIComponent(JSON.stringify(result));
+})();
+"#;
+
+/// Fetches the channels in the page and keeps only the fields StreamHub uses.
+const CHANNELS: &str = r#"
   const pick = (d) => {
     const u = (d && d.user) || {};
     const l = d && d.livestream;
     return {
-      user: { username: u.username, profile_pic: u.profile_pic },
+      user: { username: u.username, profile_pic: u.profile_pic, bio: u.bio },
+      followers_count: d && d.followers_count,
       livestream: l ? {
         is_live: l.is_live, session_title: l.session_title, viewer_count: l.viewer_count, viewers: l.viewers,
         created_at: l.created_at, start_time: l.start_time, thumbnail: l.thumbnail,
@@ -127,8 +154,57 @@ const SCRIPT: &str = r#"
       }
     })));
   }
-  location.href = "https://__HOST__/kick?id=__ID__&data=" + encodeURIComponent(JSON.stringify(out));
-})();
+  return out;
+"#;
+
+/// Kick's categories, most watched first.
+const CATEGORIES: &str = r#"
+  const res = await fetch("/api/v1/subcategories?page=1&limit=40", { headers: { Accept: "application/json" } });
+  if (!res.ok) return { status: res.status };
+  const p = await res.json();
+  const rows = Array.isArray(p) ? p : (p.data && (Array.isArray(p.data) ? p.data : p.data.data)) || p.subcategories || [];
+  return {
+    status: 200,
+    items: rows.filter((r) => r && r.slug).map((r) => ({
+      slug: r.slug,
+      name: r.name || r.slug,
+      image: img(r.banner) || img(r.thumbnail) || img(r.image) || img(r.banner_url),
+      viewers: r.viewers ?? r.viewer_count ?? null,
+    })),
+  };
+"#;
+
+/// Live streams, most viewers first: all of Kick or one category (__SLUG__ is a JSON string or null).
+const STREAMS: &str = r#"
+  const sub = __SLUG__;
+  const pages = await Promise.all([1, 2].map(async (n) => {
+    const q = new URLSearchParams({ page: String(n) });
+    if (sub) q.set("subcategory", sub);
+    const r = await fetch(`/stream/livestreams/en?${q}`, { headers: { Accept: "application/json" } });
+    if (!r.ok) return { status: r.status, rows: [] };
+    const p = await r.json();
+    return { status: 200, rows: Array.isArray(p) ? p : (p.data || p.livestreams || []) };
+  }));
+  if (pages[0].status !== 200) return { status: pages[0].status };
+  const seen = new Set();
+  const items = [];
+  for (const row of pages.flatMap((p) => p.rows)) {
+    const ch = row.channel || {};
+    const slug = ch.slug || row.slug;
+    if (!slug || seen.has(slug)) continue;
+    seen.add(slug);
+    const user = ch.user || {};
+    items.push({
+      slug,
+      name: user.username || ch.username || slug,
+      title: row.session_title || row.title || "",
+      viewers: row.viewer_count ?? row.viewers ?? null,
+      thumbnail: img(row.thumbnail) || img(row.thumbnail_url),
+      category: (row.categories && row.categories[0] && row.categories[0].name) || (row.category && row.category.name) || "",
+    });
+  }
+  items.sort((a, b) => (b.viewers || 0) - (a.viewers || 0));
+  return { status: 200, items };
 "#;
 
 fn fetcher_navigation(app: &AppHandle, url: &tauri::Url) -> bool {
@@ -200,17 +276,9 @@ fn to_channel(result: FetchResult) -> KickChannel {
     KickChannel { name: result.slug.clone(), slug: result.slug, error: Some(error), ..Default::default() }
 }
 
-/// Check which of these Kick channels are live.
-#[tauri::command]
-pub async fn kick_channels(app: AppHandle, slugs: Vec<String>) -> Result<Vec<KickChannel>, String> {
-    let mut slugs: Vec<String> = slugs.into_iter().map(|s| s.trim().to_ascii_lowercase()).collect();
-    slugs.retain(|s| valid_kick_slug(s));
-    slugs.dedup();
-    if slugs.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let window = ensure_window(&app)?;
+/// Run a script body in the hidden kick.com page and return the JSON it hands back.
+async fn run_in_kick(app: &AppHandle, body: &str) -> Result<String, String> {
+    let window = ensure_window(app)?;
     let fetcher = app.state::<KickFetcher>();
     let mut ready = fetcher.ready.subscribe();
     tokio::time::timeout(Duration::from_secs(30), ready.wait_for(|ready| *ready))
@@ -222,8 +290,8 @@ pub async fn kick_channels(app: AppHandle, slugs: Vec<String>) -> Result<Vec<Kic
     let (tx, rx) = oneshot::channel();
     fetcher.pending.lock().unwrap().insert(id, tx);
 
-    let script = SCRIPT
-        .replace("__SLUGS__", &serde_json::to_string(&slugs).map_err(|e| e.to_string())?)
+    let script = WRAPPER
+        .replace("__BODY__", body)
         .replace("__HOST__", RESULT_HOST)
         .replace("__ID__", &id.to_string());
     if let Err(e) = window.eval(&script) {
@@ -241,6 +309,42 @@ pub async fn kick_channels(app: AppHandle, slugs: Vec<String>) -> Result<Vec<Kic
             return Err("Kick didn't answer in time".into());
         }
     };
+    Ok(data)
+}
+
+/// Browse Kick: "categories", or "streams" (live streams, of one category when `slug` is given).
+#[tauri::command]
+pub async fn kick_browse(app: AppHandle, kind: String, slug: Option<String>) -> Result<Value, String> {
+    let slug = slug.map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
+    if slug.as_deref().is_some_and(|s| !valid_kick_slug(s)) {
+        return Err("Invalid category".into());
+    }
+    let body = match kind.as_str() {
+        "categories" => CATEGORIES.to_string(),
+        "streams" => STREAMS.replace("__SLUG__", &serde_json::to_string(&slug).unwrap()),
+        _ => return Err("Unknown Kick page".into()),
+    };
+    let data = run_in_kick(&app, &body).await?;
+    let value: Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+    match value["status"].as_u64() {
+        Some(200) => Ok(value["items"].clone()),
+        Some(0) => Err(format!("Couldn't reach Kick: {}", value["error"].as_str().unwrap_or_default())),
+        Some(code) => Err(format!("Kick returned {code}")),
+        None => Err("Unexpected answer from Kick".into()),
+    }
+}
+
+/// Check which of these Kick channels are live.
+#[tauri::command]
+pub async fn kick_channels(app: AppHandle, slugs: Vec<String>) -> Result<Vec<KickChannel>, String> {
+    let mut slugs: Vec<String> = slugs.into_iter().map(|s| s.trim().to_ascii_lowercase()).collect();
+    slugs.retain(|s| valid_kick_slug(s));
+    slugs.dedup();
+    if slugs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let data = run_in_kick(&app, &CHANNELS.replace("__SLUGS__", &serde_json::to_string(&slugs).unwrap())).await?;
     let results: Vec<FetchResult> = serde_json::from_str(&data).map_err(|e| e.to_string())?;
     Ok(results.into_iter().map(to_channel).collect())
 }
@@ -276,6 +380,8 @@ mod tests {
                 thumbnail: Some("https://images.kick.com/t/720.webp".into()),
                 avatar: Some("https://files.kick.com/a.webp".into()),
                 started_at: Some("2026-11-22 20:00:00".into()),
+                bio: None,
+                followers: None,
                 error: None,
             }
         );

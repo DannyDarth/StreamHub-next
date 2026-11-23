@@ -6,8 +6,10 @@ import {
   sendNotification,
 } from "@tauri-apps/plugin-notification";
 import { DEFAULTS, QUALITIES, loadSettings, saveSettings } from "./settings";
-import { AuthError, followedLive, thumbnail, validateToken } from "./twitch";
+import { AuthError, followedLive, validateToken } from "./twitch";
 import { loadKickSlugs, parseKickInput, saveKickSlugs } from "./kick";
+import { h } from "./ui";
+import * as browse from "./browse";
 import type {
   AdblockStatus,
   EndedEvent,
@@ -51,32 +53,10 @@ const state = {
   kickLoading: false,
   kickError: "",
   kickKnown: null as Set<string> | null,
+  search: "",
   /** The channel shown in the chat panel. */
   chat: null as { platform: Platform; channel: string } | null,
 };
-
-// ---- tiny DOM helper (text is always set with textContent) ----
-
-type Attrs = Record<string, string | boolean | ((e: Event) => void) | undefined>;
-
-function h<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  attrs: Attrs = {},
-  ...children: (Node | string | null | false | undefined)[]
-): HTMLElementTagNameMap[K] {
-  const el = document.createElement(tag);
-  for (const [key, value] of Object.entries(attrs)) {
-    if (value === undefined || value === false) continue;
-    if (typeof value === "function") el.addEventListener(key.replace(/^on/, ""), value);
-    else if (value === true) el.setAttribute(key, "");
-    else el.setAttribute(key, value);
-  }
-  for (const child of children) {
-    if (child === null || child === false || child === undefined) continue;
-    el.append(child);
-  }
-  return el;
-}
 
 const app = document.getElementById("app")!;
 
@@ -286,6 +266,86 @@ async function loadInfo() {
 
 // ---- views ----
 
+const ctx: browse.Ctx = {
+  render: () => render(),
+  token: () => state.token,
+  watch: (platform, channel) => void watch(platform, channel),
+  openChat: (platform, channel) => void openChat(platform, channel),
+  chatEnabled: () => state.settings.chatEnabled,
+  kickSaved: (slug) => state.kickSlugs.includes(slug),
+  addKick: (slug) => {
+    addKick(slug);
+  },
+  removeKick: (slug) => removeKick(slug),
+};
+
+function searchForm(): HTMLElement {
+  const site: Platform = state.view === "kick" ? "kick" : "twitch";
+  const input = h("input", {
+    id: "search",
+    type: "search",
+    placeholder: site === "kick" ? "Search Kick" : "Search Twitch",
+    spellcheck: "false",
+    autocomplete: "off",
+    oninput: (e) => (state.search = (e.target as HTMLInputElement).value),
+  });
+  input.value = state.search;
+  return h(
+    "form",
+    {
+      class: "search",
+      onsubmit: (e) => {
+        e.preventDefault();
+        const q = state.search.trim();
+        if (!q) return;
+        state.view = site;
+        if (site === "kick") browse.go("kick", { kind: "search", q });
+        else browse.go("twitch", { kind: "search", q });
+        (document.activeElement as HTMLElement | null)?.blur();
+        render();
+      },
+    },
+    input,
+  );
+}
+
+/** Following / Browse (or My channels / Browse) and a back button. */
+function subnav(site: Platform): HTMLElement {
+  const page = site === "kick" ? browse.kickPage() : browse.twitchPage();
+  const home = site === "kick" ? "mine" : "following";
+  const link = (kind: "home" | "browse", label: string) => {
+    const active = kind === "home" ? page.kind === home : page.kind !== home;
+    return h(
+      "button",
+      {
+        class: `sub${active ? " active" : ""}`,
+        onclick: () => {
+          if (site === "kick") browse.go("kick", kind === "home" ? { kind: "mine" } : { kind: "browse" });
+          else browse.go("twitch", kind === "home" ? { kind: "following" } : { kind: "browse" });
+          render();
+        },
+      },
+      label,
+    );
+  };
+  return h(
+    "div",
+    { class: "subnav" },
+    browse.canGoBack(site)
+      ? h("button", { class: "small", title: "Back", onclick: () => { browse.back(site); render(); } }, "‹ Back")
+      : null,
+    link("home", site === "kick" ? "My channels" : "Following"),
+    link("browse", "Browse"),
+    page.kind !== home
+      ? h(
+          "button",
+          { class: "small push", onclick: () => { browse.refreshPage(site); render(); } },
+          "Refresh",
+        )
+      : null,
+  );
+}
+
 function header(): HTMLElement {
   const tab = (view: View, label: string) =>
     h(
@@ -306,6 +366,7 @@ function header(): HTMLElement {
     h("div", { class: "brand" }, h("img", { class: "logo", src: "/icon.png", alt: "" }), "StreamHub"),
     h("nav", {}, tab("twitch", "Twitch"), tab("kick", "Kick"), tab("settings", "Settings")),
     h("div", { class: "spacer" }),
+    searchForm(),
     state.user
       ? h(
           "div",
@@ -358,25 +419,10 @@ function playingBar(): HTMLElement | null {
   );
 }
 
-function card(stream: LiveStream): HTMLElement {
-  return h(
-    "button",
-    { class: "card", title: `Watch ${stream.user_name}`, onclick: () => void watch("twitch", stream.user_login) },
-    h(
-      "div",
-      { class: "thumb" },
-      h("img", { src: `${thumbnail(stream)}?t=${Math.floor(Date.now() / REFRESH_MS)}`, alt: "", loading: "lazy" }),
-      h("span", { class: "viewers" }, `● ${stream.viewer_count.toLocaleString()}`),
-    ),
-    h("div", { class: "card-title" }, stream.title || "Untitled stream"),
-    h("div", { class: "card-meta" }, h("strong", {}, stream.user_name), stream.game_name ? ` · ${stream.game_name}` : ""),
-  );
-}
-
 function liveView(): HTMLElement {
   const list =
     state.streams.length > 0
-      ? h("div", { class: "grid" }, ...state.streams.map(card))
+      ? h("div", { class: "grid" }, ...state.streams.map((st) => browse.twitchStreamCard(ctx, st)))
       : h("p", { class: "empty" }, state.loading ? "Loading…" : "None of the channels you follow are live right now.");
   return h(
     "main",
@@ -384,7 +430,7 @@ function liveView(): HTMLElement {
     h(
       "div",
       { class: "toolbar" },
-      h("h1", {}, "Twitch · Following live"),
+      h("h1", {}, "Following · Live"),
       h("button", { class: "small", onclick: () => void refresh(), disabled: state.loading }, state.loading ? "Refreshing…" : "Refresh"),
     ),
     list,
@@ -483,7 +529,7 @@ function kickView(): HTMLElement {
     h(
       "div",
       { class: "toolbar" },
-      h("h1", {}, "Kick · Your channels"),
+      h("h1", {}, "My Kick channels"),
       h(
         "button",
         { class: "small", onclick: () => void refreshKick(), disabled: state.kickLoading },
@@ -658,12 +704,21 @@ function signInView(): HTMLElement {
   );
 }
 
+/** Put the section's sub-navigation on top of a page. */
+function withSubnav(site: Platform, page: HTMLElement): HTMLElement {
+  const main = page.tagName === "MAIN" ? page : h("main", {}, page);
+  main.prepend(subnav(site));
+  return main;
+}
+
 let currentBody: HTMLElement | null = null;
 let currentView: View | null = null;
 
 function render() {
   // don't rebuild a form while the user is typing in it
   const active = document.activeElement;
+  const searchFocused = active instanceof HTMLInputElement && active.id === "search";
+  const caret = searchFocused ? active.selectionStart : null;
   const editing =
     currentView === state.view &&
     (state.view === "settings" || state.view === "kick") &&
@@ -676,9 +731,9 @@ function render() {
       : state.view === "settings"
         ? settingsView()
         : state.view === "kick"
-          ? kickView()
+          ? withSubnav("kick", browse.kickContent(ctx) ?? kickView())
           : state.user
-            ? liveView()
+            ? withSubnav("twitch", browse.twitchContent(ctx) ?? liveView())
             : signInView();
   document.body.classList.toggle("with-chat", Boolean(state.chat));
   const chatBar = state.chat
@@ -700,6 +755,11 @@ function render() {
     body,
     chatBar ?? "",
   );
+  if (searchFocused) {
+    const search = document.getElementById("search") as HTMLInputElement | null;
+    search?.focus();
+    if (search && caret !== null) search.setSelectionRange(caret, caret);
+  }
 }
 
 // ---- events from the Rust side ----

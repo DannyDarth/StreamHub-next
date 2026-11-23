@@ -30,6 +30,7 @@ pub fn run() {
             streamlink::streamlink_info,
             badge::badge_hide,
             kick::kick_channels,
+            kick::kick_browse,
             chat::open_chat,
             chat::close_chat,
         ])
