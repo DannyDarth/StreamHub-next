@@ -384,7 +384,7 @@ function header(): HTMLElement {
     h(
       "button",
       {
-        class: `tab${state.view === view ? " active" : ""}`,
+        class: `tab tab-${view}${state.view === view ? " active" : ""}`,
         onclick: () => {
           state.view = view;
           if (view === "settings") void loadInfo();

@@ -346,3 +346,14 @@ body.with-chat .banner, body.with-chat .playing { margin-right: calc(340px + 20p
 :root[data-theme="light"] .banner.error { color: var(--error); }
 :root[data-theme="light"] .primary { color: #fff; }
 .field small { font-size: 12.5px; }
+
+/* Site tabs in each site's colours: Twitch purple, Kick green */
+.tab-twitch { color: #a970ff; }
+.tab-twitch:hover { background: rgba(145, 70, 255, 0.15); color: #bf94ff; }
+.tab-twitch.active { background: #9146ff; color: #fff; }
+.tab-kick { color: #53fc18; }
+.tab-kick:hover { background: rgba(83, 252, 24, 0.12); color: #7dff4f; }
+.tab-kick.active { background: #53fc18; color: #0b0e0f; }
+.tab-twitch.active, .tab-kick.active { font-weight: 600; }
+:root[data-theme="light"] .tab-twitch:not(.active) { color: #772ce8; }
+:root[data-theme="light"] .tab-kick:not(.active) { color: #248a07; }
